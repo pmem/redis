@@ -51,6 +51,10 @@
 #include <lua.h>
 #include <signal.h>
 
+#ifdef USE_NVML
+#include <libpmemlog.h>
+#endif
+
 typedef long long mstime_t; /* millisecond time type. */
 
 #include "ae.h"      /* Event driven programming library */
@@ -121,6 +125,11 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_DEFAULT_MAXMEMORY 0
 #define REDIS_DEFAULT_MAXMEMORY_SAMPLES 3
 #define REDIS_DEFAULT_AOF_FILENAME "appendonly.aof"
+#ifdef USE_NVML
+#define REDIS_DEFAULT_AOF_USE_NVML 0
+#define REDIS_DEFAULT_AOF_NVML_DIRECT 0
+#define REDIS_DEFAULT_AOF_NVML_LOG_SIZE (100*1024*1024) /* 100mb */
+#endif
 #define REDIS_DEFAULT_AOF_NO_FSYNC_ON_REWRITE 0
 #define REDIS_DEFAULT_AOF_LOAD_TRUNCATED 1
 #define REDIS_DEFAULT_ACTIVE_REHASHING 1
@@ -711,6 +720,17 @@ struct redisServer {
     int aof_last_write_status;      /* REDIS_OK or REDIS_ERR */
     int aof_last_write_errno;       /* Valid if aof_last_write_status is ERR */
     int aof_load_truncated;         /* Don't stop on unexpected AOF EOF. */
+#ifdef USE_NVML
+    int aof_use_nvml;               /* Use NVML PMEMLOG to write and read AOF log */
+    int aof_nvml_direct;            /* Do not use in-memory rewrite buffer */
+    off_t aof_nvml_log_size;        /* Size of PMEMLOG defined in config in bytes */
+    PMEMlogpool *aof_plp;           /* Handle to PMEMLOG control object */
+    char *aof_filename_rewr;        /* filename of rewrite PMEMLOG pool file */
+    int aof_fd_rewr;                /* File descriptor of rewrite PMEMLOG pool */
+    PMEMlogpool *aof_plp_rewr;      /* Handle to PMEMLOG pool used at rewrite */
+    int aof_trigger_rewrite;        /* Used when there's needed rewrite after opening AOF */
+    off_t aof_nvml_direct_pos;      /* Position in PMEMLOG where rewrite started */
+#endif
     /* RDB persistence */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
@@ -1105,11 +1125,14 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 void aofRemoveTempFile(pid_t childpid);
 int rewriteAppendOnlyFileBackground(void);
 int loadAppendOnlyFile(char *filename);
+int loadAppendOnlyFilePMEMlog();
 void stopAppendOnly(void);
 int startAppendOnly(void);
 void backgroundRewriteDoneHandler(int exitcode, int bysignal);
 void aofRewriteBufferReset(void);
 unsigned long aofRewriteBufferSize(void);
+void openAppendOnlyFile(void);
+int closeAppendOnlyFile(void);
 
 /* Sorted sets data type */
 

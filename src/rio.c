@@ -157,6 +157,40 @@ void rioInitWithFile(rio *r, FILE *fp) {
     r->io.file.autosync = 0;
 }
 
+#ifdef USE_NVML
+/* --------------------- PMEMlog implementation ------------------- */
+
+/* Returns 1 or 0 for success/failure. */
+static size_t rioPMEMLogWrite(rio *r, const void* buf, size_t len) {
+    if (!pmemlog_append(r->io.pmemlog.plp, buf, len)) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static off_t rioPMEMLogTell(rio *r) {
+    return pmemlog_tell(r->io.pmemlog.plp);
+}
+
+static const rio rioPMEMLogIO = {
+    NULL,
+    rioPMEMLogWrite,
+    rioPMEMLogTell,
+    NULL,
+    NULL,
+    0,
+    0,
+    0,
+    { { NULL } }
+};
+
+void rioInitWithPMEMLog(rio *r, PMEMlogpool *plp) {
+    *r = rioPMEMLogIO;
+    r->io.pmemlog.plp = plp;
+}
+#endif
+
 /* ------------------- File descriptors set implementation ------------------- */
 
 /* Returns 1 or 0 for success/failure.

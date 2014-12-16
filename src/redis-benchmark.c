@@ -45,9 +45,11 @@
 #include "sds.h"
 #include "adlist.h"
 #include "zmalloc.h"
+#include "version.h"
 
 #define REDIS_NOTUSED(V) ((void) V)
 #define RANDPTR_INITIAL_SIZE 8
+#define CMDPTR_INITIAL_SIZE 1
 
 static struct config {
     aeEventLoop *el;
@@ -61,8 +63,11 @@ static struct config {
     int requests_finished;
     int keysize;
     int datasize;
+    int datasize_max;
     int randomkeys;
     int randomkeys_keyspacelen;
+    size_t randomkeys_seqkey; /* Current value of sequential key */
+    size_t randomkeys_seqkey_get; /* Current value of sequential key for GET (in MIXED test) */
     int keepalive;
     int pipeline;
     long long start;
@@ -77,23 +82,26 @@ static struct config {
     int dbnum;
     sds dbnumstr;
     char *tests;
-    char *auth;
+    char *testfile;
+    int cmdnum;
+    int mixed_ratio;
+    int randomsize;
 } config;
 
 typedef struct _client {
     redisContext *context;
-    sds obuf;
-    char **randptr;         /* Pointers to :rand: strings inside the command buf */
-    size_t randlen;         /* Number of pointers in client->randptr */
-    size_t randfree;        /* Number of unused pointers in client->randptr */
+    sds obuf[101];
+    char **randptr[101];      /* Pointers to :rand: strings inside the command buf */
+    size_t randlen[101];      /* Number of pointers in client->randptr */
+    size_t randfree[101];     /* Number of unused pointers in client->randptr */
     unsigned int written;   /* Bytes of 'obuf' already written */
     long long start;        /* Start time of a request */
     long long latency;      /* Request latency */
     int pending;            /* Number of pending requests (replies to consume) */
-    int prefix_pending;     /* If non-zero, number of pending prefix commands. Commands
-                               such as auth and select are prefixed to the pipeline of
-                               benchmark commands and discarded after the first send. */
-    int prefixlen;          /* Size in bytes of the pending prefix commands */
+    int selectlen;  /* If non-zero, a SELECT of 'selectlen' bytes is currently
+                       used as a prefix of the pipline of commands. This gets
+                       discarded the first time it's sent. */
+    int cmdidx;     /* Random command/data selector. */
 } *client;
 
 /* Prototypes */
@@ -126,8 +134,10 @@ static void freeClient(client c) {
     aeDeleteFileEvent(config.el,c->context->fd,AE_WRITABLE);
     aeDeleteFileEvent(config.el,c->context->fd,AE_READABLE);
     redisFree(c->context);
-    sdsfree(c->obuf);
-    zfree(c->randptr);
+    for (int i = 0; i < 101; i++) {
+        sdsfree(c->obuf[i]);
+        zfree(c->randptr[i]);
+    }
     zfree(c);
     config.liveclients--;
     ln = listSearchKey(config.clients,c);
@@ -153,19 +163,129 @@ static void resetClient(client c) {
     c->pending = config.pipeline;
 }
 
+static void createRandomData(client c) {
+    int i, a, b;
+    char *data, *cmd[101];
+    size_t len[101];
+    a = config.datasize_max - config.datasize;
+
+    if (config.cmdnum > 1) {
+        len[0] = redisFormatCommand(&cmd[0], "GET key:__rand_int__");
+        c->obuf[0] = sdsnew(cmd[0]);
+    }
+
+    if (a < 100){
+        for (i = 1; i <= a; i++){
+            data = zmalloc(config.datasize+i+1);
+            memset(data,'x',config.datasize+i);
+            data[config.datasize+i] = '\0';
+            len[i] = redisFormatCommand(&cmd[i],"SET key:__rand_int__ %s", data);
+            c->obuf[i] = sdsnew(cmd[i]);
+            c->randlen[i] = 0;
+            c->randfree[i] = RANDPTR_INITIAL_SIZE;
+            c->randptr[i] = zmalloc(sizeof(char*)*c->randfree[i]);
+
+            char *p = c->obuf[i];
+            while ((p = strstr(p,"__rand_int__")) != NULL) {
+                if (c->randfree[i] == 0) {
+                    c->randptr[i] = zrealloc(c->randptr[i],sizeof(char*)*c->randlen[i]*2);
+                    c->randfree[i] += c->randlen[i];
+                }
+                c->randptr[i][c->randlen[i]++] = p;
+                c->randfree[i]--;
+                p += 12; /* 12 is strlen("__rand_int__). */
+            }
+        }
+    } else {
+        b = a / 100;
+        for (i = 1; i < 101; i++){
+            data = zmalloc(config.datasize+b*i+1);
+            memset(data,'x',config.datasize+b*i);
+            data[config.datasize+b*i] = '\0';
+            len[i] = redisFormatCommand(&cmd[i],"SET key:__rand_int__ %s", data);
+            c->obuf[i] = sdsnew(cmd[i]);
+            c->randlen[i] = 0;
+            c->randfree[i] = RANDPTR_INITIAL_SIZE;
+            c->randptr[i] = zmalloc(sizeof(char*)*c->randfree[i]);
+
+            char *p = c->obuf[i];
+            while ((p = strstr(p,"__rand_int__")) != NULL) {
+                if (c->randfree[i] == 0) {
+                    c->randptr[i] = zrealloc(c->randptr[i],sizeof(char*)*c->randlen[i]*2);
+                    c->randfree[i] += c->randlen[i];
+                }
+                c->randptr[i][c->randlen[i]++] = p;
+                c->randfree[i]--;
+                p += 12; /* 12 is strlen("__rand_int__). */
+            }
+        }
+    }
+}
+
+void randomizeClientValues(client c) {
+    /* Randomized size is enabled (different min/max sizes + SET/MIXED test) AND
+     *   this is the only command (SET) OR
+     *   this is SET command in MIXED test
+     */
+    if ((config.randomsize == 1) &&
+        ((config.cmdnum == 1) || (c->cmdidx == 1))) {
+
+        int a, b;
+        // TODO
+        b = config.datasize_max - config.datasize;
+
+        if (b > 100) {
+            a = (random() % 100) + 1;
+        } else {
+            a = (random() % b) + 1;
+        }
+
+        c->cmdidx = a;
+    }
+}
+
 static void randomizeClientKey(client c) {
     size_t i;
 
-    for (i = 0; i < c->randlen; i++) {
-        char *p = c->randptr[i]+11;
-        size_t r = random() % config.randomkeys_keyspacelen;
+    for (i = 0; i < c->randlen[c->cmdidx]; i++) {
+        char *p = c->randptr[c->cmdidx][i]+11;
+        size_t r;
         size_t j;
+
+        if (config.randomkeys_keyspacelen == -1) {
+            /* use sequential keys */
+
+            /* Special handling for GET command in MIXED test */
+            if ((config.cmdnum > 1) && (c->cmdidx == 0)) {
+                /* Make sure GET will always query the existing key */
+                if (config.randomkeys_seqkey > 0) {
+                    r = config.randomkeys_seqkey_get++ % config.randomkeys_seqkey;
+                } else {
+                    r = 0;
+                }
+            } else {
+                r = config.randomkeys_seqkey++;
+            }
+        } else {
+            r = random() % config.randomkeys_keyspacelen;
+        }
 
         for (j = 0; j < 12; j++) {
             *p = '0'+r%10;
             r/=10;
             p--;
         }
+    }
+}
+
+static void randomizeClientCommand(client c) {
+    size_t r;
+
+    r = random() % 100;
+    if (r < config.mixed_ratio) {
+        c->cmdidx = 1; /* SET */
+    } else {
+        c->cmdidx = 0; /* GET */
     }
 }
 
@@ -213,21 +333,23 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 }
 
                 freeReplyObject(reply);
-                /* This is an OK for prefix commands such as auth and select.*/
-                if (c->prefix_pending > 0) {
-                    c->prefix_pending--;
+
+                if (c->selectlen) {
+                    int i, j;
+
+                    /* This is the OK from SELECT. Just discard the SELECT
+                     * from the buffer. */
                     c->pending--;
-                    /* Discard prefix commands on first response.*/
-                    if (c->prefixlen > 0) {
-                        size_t j;
-                        sdsrange(c->obuf, c->prefixlen, -1);
+
+                    for (i = 0; i < config.cmdnum; i++) {
+                        sdsrange(c->obuf[i],c->selectlen,-1);
                         /* We also need to fix the pointers to the strings
-                        * we need to randomize. */
-                        for (j = 0; j < c->randlen; j++)
-                            c->randptr[j] -= c->prefixlen;
-                        c->prefixlen = 0;
+                         * we need to randomize. */
+                        for (j = 0; j < c->randlen[i]; j++)
+                            c->randptr[i][j] -= c->selectlen;
                     }
-                    continue;                
+                    c->selectlen = 0;
+                    continue;
                 }
 
                 if (config.requests_finished < config.requests)
@@ -252,29 +374,60 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
+        /* If this is MIXED test, select GET by default */
+        /* Otherwise, thesre is only ona command */
+        c->cmdidx = 0;
+
         /* Enforce upper bound to number of requests. */
         if (config.requests_issued++ >= config.requests) {
             freeClient(c);
             return;
         }
 
-        /* Really initialize: randomize keys and set start time. */
-        if (config.randomkeys) randomizeClientKey(c);
-        c->start = ustime();
-        c->latency = -1;
+        if (config.datasize_max == config.datasize) {
+            /* update command string (SET or GET) */
+            if (config.cmdnum > 1) {
+                randomizeClientCommand(c);
+            }
+
+            /* Really initialize: randomize keys and set start time. */
+            if (config.randomkeys) {
+                randomizeClientKey(c);
+            }
+
+            c->start = ustime();
+            c->latency = -1;
+        } else {
+            /* update command string (SET or GET) */
+            if (config.cmdnum > 1) {
+                randomizeClientCommand(c);
+            }
+
+            /* Randomize requests flow */
+            randomizeClientValues(c);
+
+            if (config.randomkeys) {
+                randomizeClientKey(c);
+            }
+
+            c->start = ustime();
+            c->latency = -1;
+        }
+
     }
 
-    if (sdslen(c->obuf) > c->written) {
-        void *ptr = c->obuf+c->written;
-        int nwritten = write(c->context->fd,ptr,sdslen(c->obuf)-c->written);
+    if (sdslen(c->obuf[c->cmdidx]) > c->written) {
+        void *ptr = c->obuf[c->cmdidx]+c->written;
+        int nwritten = write(c->context->fd,ptr,sdslen(c->obuf[c->cmdidx])-c->written);
         if (nwritten == -1) {
             if (errno != EPIPE)
                 fprintf(stderr, "Writing to socket: %s\n", strerror(errno));
             freeClient(c);
             return;
         }
+
         c->written += nwritten;
-        if (sdslen(c->obuf) == c->written) {
+        if (sdslen(c->obuf[c->cmdidx]) == c->written) {
             aeDeleteFileEvent(config.el,c->context->fd,AE_WRITABLE);
             aeCreateFileEvent(config.el,c->context->fd,AE_READABLE,readHandler,c);
         }
@@ -301,9 +454,10 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * 2) The offsets of the __rand_int__ elements inside the command line, used
  *    for arguments randomization.
  *
- * Even when cloning another client, prefix commands are applied if needed.*/
-static client createClient(char *cmd, size_t len, client from) {
-    int j;
+ * Even when cloning another client, the SELECT command is automatically prefixed
+ * if needed. */
+static client createClient(char **cmd, size_t *len, client from) {
+    int i, j;
     client c = zmalloc(sizeof(struct _client));
 
     if (config.hostsocket == NULL) {
@@ -319,81 +473,86 @@ static client createClient(char *cmd, size_t len, client from) {
             fprintf(stderr,"%s: %s\n",config.hostsocket,c->context->errstr);
         exit(1);
     }
+
     /* Suppress hiredis cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
+    if (config.randomsize == 0) {
+        for (i = 0; i < config.cmdnum; i++) {
+            /* Build the request buffer:
+             * Queue N requests accordingly to the pipeline size, or simply clone
+             * the example client buffer. */
+            c->obuf[i] = sdsempty();
 
-    /* Build the request buffer:
-     * Queue N requests accordingly to the pipeline size, or simply clone
-     * the example client buffer. */
-    c->obuf = sdsempty();
-    /* Prefix the request buffer with AUTH and/or SELECT commands, if applicable.
-     * These commands are discarded after the first response, so if the client is
-     * reused the commands will not be used again. */
-    c->prefix_pending = 0;
-    if (config.auth) {
-        char *buf = NULL;
-        int len = redisFormatCommand(&buf, "AUTH %s", config.auth);
-        c->obuf = sdscatlen(c->obuf, buf, len);
-        free(buf);
-        c->prefix_pending++;
-    }
-
-    /* If a DB number different than zero is selected, prefix our request
-     * buffer with the SELECT command, that will be discarded the first
-     * time the replies are received, so if the client is reused the
-     * SELECT command will not be used again. */
-    if (config.dbnum != 0) {
-        c->obuf = sdscatprintf(c->obuf,"*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
-            (int)sdslen(config.dbnumstr),config.dbnumstr);
-        c->prefix_pending++;
-    }
-    c->prefixlen = sdslen(c->obuf);
-    /* Append the request itself. */
-    if (from) {
-        c->obuf = sdscatlen(c->obuf,
-            from->obuf+from->prefixlen,
-            sdslen(from->obuf)-from->prefixlen);
-    } else {
-        for (j = 0; j < config.pipeline; j++)
-            c->obuf = sdscatlen(c->obuf,cmd,len);
-    }
-
-    c->written = 0;
-    c->pending = config.pipeline+c->prefix_pending;
-    c->randptr = NULL;
-    c->randlen = 0;
-
-    /* Find substrings in the output buffer that need to be randomized. */
-    if (config.randomkeys) {
-        if (from) {
-            c->randlen = from->randlen;
-            c->randfree = 0;
-            c->randptr = zmalloc(sizeof(char*)*c->randlen);
-            /* copy the offsets. */
-            for (j = 0; j < (int)c->randlen; j++) {
-                c->randptr[j] = c->obuf + (from->randptr[j]-from->obuf);
-                /* Adjust for the different select prefix length. */
-                c->randptr[j] += c->prefixlen - from->prefixlen;
+            /* If a DB number different than zero is selected, prefix our request
+             * buffer with the SELECT command, that will be discarded the first
+             * time the replies are received, so if the client is reused the
+             * SELECT command will not be used again. */
+            if (config.dbnum != 0) {
+                c->obuf[i] = sdscatprintf(c->obuf[i],"*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
+                    (int)sdslen(config.dbnumstr),config.dbnumstr);
+                c->selectlen = sdslen(c->obuf[i]);
+            } else {
+                c->selectlen = 0;
             }
-        } else {
-            char *p = c->obuf;
 
-            c->randlen = 0;
-            c->randfree = RANDPTR_INITIAL_SIZE;
-            c->randptr = zmalloc(sizeof(char*)*c->randfree);
-            while ((p = strstr(p,"__rand_int__")) != NULL) {
-                if (c->randfree == 0) {
-                    c->randptr = zrealloc(c->randptr,sizeof(char*)*c->randlen*2);
-                    c->randfree += c->randlen;
+            /* Append the request itself. */
+            if (from) {
+                c->obuf[i] = sdscatlen(c->obuf[i],
+                    from->obuf[i]+from->selectlen,
+                    sdslen(from->obuf[i])-from->selectlen);
+            } else {
+                for (j = 0; j < config.pipeline; j++)
+                    c->obuf[i] = sdscatlen(c->obuf[i],cmd[i],len[i]);
+            }
+            c->written = 0;
+            c->pending = config.pipeline;
+            c->randptr[i] = NULL;
+            c->randlen[i] = 0;
+
+            if (c->selectlen) c->pending++;
+
+            /* Find substrings in the output buffer that need to be randomized. */
+            if (config.randomkeys) {
+                if (from) {
+                    c->randlen[i] = from->randlen[i];
+                    c->randfree[i] = 0;
+                    c->randptr[i] = zmalloc(sizeof(char*)*c->randlen[i]);
+                    /* copy the offsets. */
+                    for (j = 0; j < c->randlen[i]; j++) {
+                        c->randptr[i][j] = c->obuf[i] + (from->randptr[i][j]-from->obuf[i]);
+                        /* Adjust for the different select prefix length. */
+                        c->randptr[i][j] += c->selectlen - from->selectlen;
+                    }
+                } else {
+                    char *p = c->obuf[i];
+
+                    c->randlen[i] = 0;
+                    c->randfree[i] = RANDPTR_INITIAL_SIZE;
+                    c->randptr[i] = zmalloc(sizeof(char*)*c->randfree[i]);
+                    while ((p = strstr(p,"__rand_int__")) != NULL) {
+                        if (c->randfree[i] == 0) {
+                            c->randptr[i] = zrealloc(c->randptr[i],sizeof(char*)*c->randlen[i]*2);
+                            c->randfree[i] += c->randlen[i];
+                        }
+                        c->randptr[i][c->randlen[i]++] = p;
+                        c->randfree[i]--;
+                        p += 12; /* 12 is strlen("__rand_int__"). */
+                    }
                 }
-                c->randptr[c->randlen++] = p;
-                c->randfree--;
-                p += 12; /* 12 is strlen("__rand_int__). */
             }
         }
+    } else {
+        /* Random values flow does not support more than one database */
+        c->selectlen = 0;
+        if (c->selectlen) {
+            c->pending++;
+        }
+        c->written = 0;
+        c->pending = config.pipeline;
+        createRandomData(c);
     }
-    if (config.idlemode == 0)
-        aeCreateFileEvent(config.el,c->context->fd,AE_WRITABLE,writeHandler,c);
+
+    aeCreateFileEvent(config.el,c->context->fd,AE_WRITABLE,writeHandler,c);
     listAddNodeTail(config.clients,c);
     config.liveclients++;
     return c;
@@ -401,6 +560,15 @@ static client createClient(char *cmd, size_t len, client from) {
 
 static void createMissingClients(client c) {
     int n = 0;
+//    char *buf = c->obuf;
+//    size_t buflen = sdslen(c->obuf);
+
+    /* If we are cloning from a client with a SELECT prefix, skip it since the
+     * client will be created with the prefixed SELECT if needed. */
+//    if (c->selectlen) {
+//        buf += c->selectlen;
+//        buflen -= c->selectlen;
+//    }
 
     while(config.liveclients < config.numclients) {
         createClient(NULL,0,c);
@@ -447,7 +615,7 @@ static void showLatencyReport(void) {
     }
 }
 
-static void benchmark(char *title, char *cmd, int len) {
+static void benchmark(char *title, char **cmd, size_t *len) {
     client c;
 
     config.title = title;
@@ -492,14 +660,16 @@ int parseOptions(int argc, const char **argv) {
         } else if (!strcmp(argv[i],"-s")) {
             if (lastarg) goto invalid;
             config.hostsocket = strdup(argv[++i]);
-        } else if (!strcmp(argv[i],"-a") ) {
-            if (lastarg) goto invalid;
-            config.auth = strdup(argv[++i]);
         } else if (!strcmp(argv[i],"-d")) {
             if (lastarg) goto invalid;
             config.datasize = atoi(argv[++i]);
             if (config.datasize < 1) config.datasize=1;
             if (config.datasize > 1024*1024*1024) config.datasize = 1024*1024*1024;
+        } else if (!strcmp(argv[i],"-D")) {
+            if (lastarg) goto invalid;
+            config.datasize_max = atoi(argv[++i]);
+            if (config.datasize_max < 1) config.datasize_max=1;
+            if (config.datasize_max > 1024*1024*1024) config.datasize_max = 1024*1024*1024;
         } else if (!strcmp(argv[i],"-P")) {
             if (lastarg) goto invalid;
             config.pipeline = atoi(argv[++i]);
@@ -508,7 +678,7 @@ int parseOptions(int argc, const char **argv) {
             if (lastarg) goto invalid;
             config.randomkeys = 1;
             config.randomkeys_keyspacelen = atoi(argv[++i]);
-            if (config.randomkeys_keyspacelen < 0)
+            if (config.randomkeys_keyspacelen < -1)
                 config.randomkeys_keyspacelen = 0;
         } else if (!strcmp(argv[i],"-q")) {
             config.quiet = 1;
@@ -516,8 +686,17 @@ int parseOptions(int argc, const char **argv) {
             config.csv = 1;
         } else if (!strcmp(argv[i],"-l")) {
             config.loop = 1;
+        } else if (!strcmp(argv[i],"-a")) {
+            if (lastarg) goto invalid;
+            config.mixed_ratio = atoi(argv[++i]);
+            if ((config.mixed_ratio < 0) || (config.mixed_ratio > 100)) {
+                goto invalid;
+            }
         } else if (!strcmp(argv[i],"-I")) {
             config.idlemode = 1;
+        } else if (!strcmp(argv[i],"-z")) {
+            if (lastarg) goto invalid;
+            config.testfile = strdup(argv[++i]);
         } else if (!strcmp(argv[i],"-t")) {
             if (lastarg) goto invalid;
             /* We get the list of tests to run as a string in the form
@@ -536,6 +715,9 @@ int parseOptions(int argc, const char **argv) {
         } else if (!strcmp(argv[i],"--help")) {
             exit_status = 0;
             goto usage;
+        } else if (!strcmp(argv[i],"--ver")) {
+            fprintf(stderr, "redis-benchmark, version " REDIS_VERSION "\n");
+            exit(0);
         } else {
             /* Assume the user meant to provide an option when the arg starts
              * with a dash. We're done otherwise and should use the remainder
@@ -556,10 +738,10 @@ usage:
 " -h <hostname>      Server hostname (default 127.0.0.1)\n"
 " -p <port>          Server port (default 6379)\n"
 " -s <socket>        Server socket (overrides host and port)\n"
-" -a <password>      Password for Redis Auth\n"
 " -c <clients>       Number of parallel connections (default 50)\n"
-" -n <requests>      Total number of requests (default 100000)\n"
-" -d <size>          Data size of SET/GET value in bytes (default 2)\n"
+" -n <requests>      Total number of requests (default 10000)\n"
+" -d <size>          Data size of SET/GET value in bytes (default 3)\n"
+" -D <size>          Maximum data size for randomize requests - optional flag (default 3)\n"
 " -dbnum <db>        SELECT the specified db number (default 0)\n"
 " -k <boolean>       1=keep alive 0=reconnect (default 1)\n"
 " -r <keyspacelen>   Use random keys for SET/GET/INCR, random values for SADD\n"
@@ -568,13 +750,20 @@ usage:
 "  from 0 to keyspacelen-1. The substitution changes every time a command\n"
 "  is executed. Default tests use this to hit random keys in the\n"
 "  specified range.\n"
+"  If keyspacelen == -1, then sequential (unique) keys are used, instead\n"
+"  of random ones.\n"
 " -P <numreq>        Pipeline <numreq> requests. Default 1 (no pipeline).\n"
 " -q                 Quiet. Just show query/sec values\n"
 " --csv              Output in CSV format\n"
 " -l                 Loop. Run the tests forever\n"
 " -t <tests>         Only run the comma separated list of tests. The test\n"
 "                    names are the same as the ones produced as output.\n"
-" -I                 Idle mode. Just open N idle connections and wait.\n\n"
+" -I                 Idle mode. Just open N idle connections and wait.\n"
+" -z <testfile>      Use pre-defined data to populate object values, instead of\n"
+"                    \"xxxx...\" strings. Data will be loaded from the specified file.\n"
+" -a                 Specifies the percentage of SET commands in MIXED test\n"
+"                    The remaining commands will be GET (default 50)\n"
+" --ver              Displays benchmark version.\n\n"
 "Examples:\n\n"
 " Run the benchmark with the default configuration against 127.0.0.1:6379:\n"
 "   $ redis-benchmark\n\n"
@@ -599,16 +788,7 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
     REDIS_NOTUSED(id);
     REDIS_NOTUSED(clientData);
 
-    if (config.liveclients == 0) {
-        fprintf(stderr,"All clients disconnected... aborting.\n");
-        exit(1);
-    } 
     if (config.csv) return 250;
-    if (config.idlemode == 1) {
-        printf("clients: %d\r", config.liveclients);
-        fflush(stdout);
-	return 250;
-    }
     float dt = (float)(mstime()-config.start)/1000.0;
     float rps = (float)config.requests_finished/dt;
     printf("%s: %.2f\r", config.title, rps);
@@ -632,9 +812,11 @@ int test_is_selected(char *name) {
 
 int main(int argc, const char **argv) {
     int i;
-    char *data, *cmd;
-    int len;
-
+    char *data, *file_contents;
+    char *cmd[2];
+    size_t len[2];
+    FILE *fp;
+    long input_file_size;
     client c;
 
     srandom(time(NULL));
@@ -642,12 +824,13 @@ int main(int argc, const char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     config.numclients = 50;
-    config.requests = 100000;
+    config.requests = 10000;
     config.liveclients = 0;
     config.el = aeCreateEventLoop(1024*10);
     aeCreateTimeEvent(config.el,1,showThroughput,NULL,NULL);
     config.keepalive = 1;
     config.datasize = 3;
+    config.datasize_max = 3;
     config.pipeline = 1;
     config.randomkeys = 0;
     config.randomkeys_keyspacelen = 0;
@@ -661,12 +844,19 @@ int main(int argc, const char **argv) {
     config.hostport = 6379;
     config.hostsocket = NULL;
     config.tests = NULL;
+    config.testfile = NULL;
+    config.mixed_ratio = 50;
     config.dbnum = 0;
-    config.auth = NULL;
+    config.cmdnum = 1;
+    config.randomsize = 0;
 
     i = parseOptions(argc,argv);
     argc -= i;
     argv += i;
+
+    if (config.datasize_max < config.datasize) {
+        config.datasize_max = config.datasize;
+    }
 
     config.latency = zmalloc(sizeof(long long)*config.requests);
 
@@ -676,7 +866,9 @@ int main(int argc, const char **argv) {
 
     if (config.idlemode) {
         printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
-        c = createClient("",0,NULL); /* will never receive a reply */
+        cmd[0] = "";
+        len[0] = 0;
+        c = createClient(cmd,len,NULL); /* will never receive a reply */
         createMissingClients(c);
         aeMain(config.el);
         /* and will wait for every */
@@ -691,70 +883,101 @@ int main(int argc, const char **argv) {
         }
 
         do {
-            len = redisFormatCommandArgv(&cmd,argc,argv,NULL);
+            len[0] = redisFormatCommandArgv(&cmd[0],argc,argv,NULL);
             benchmark(title,cmd,len);
-            free(cmd);
+            free(cmd[0]);
         } while(config.loop);
 
         return 0;
     }
 
     /* Run default benchmark suite. */
-    data = zmalloc(config.datasize+1);
     do {
-        memset(data,'x',config.datasize);
-        data[config.datasize] = '\0';
+        /* reset sequential key */
+        config.randomkeys_seqkey = 0;
+        config.randomkeys_seqkey_get = 0;
+        config.randomsize = 0;
+        config.cmdnum = 1;
 
-        if (test_is_selected("ping_inline") || test_is_selected("ping"))
-            benchmark("PING_INLINE","PING\r\n",6);
+        if (config.testfile == NULL) {
+            data = zmalloc(config.datasize+1);
+            memset(data,'x',config.datasize);
+            data[config.datasize] = '\0';
+        } else {
+            fp = fopen(config.testfile, "r");
+            fseek(fp, 0, SEEK_END);
+            input_file_size = ftell(fp);
+            rewind(fp);
+            file_contents = malloc(input_file_size * (sizeof(char)));
+            fread(file_contents, sizeof(char), input_file_size, fp);
+            fclose(fp);
+            data = file_contents;
+        }
+
+        if (test_is_selected("ping_inline") || test_is_selected("ping")) {
+            cmd[0] = "PING\r\n";
+            len[0] = 6;
+            benchmark("PING_INLINE",cmd,len);
+        }
 
         if (test_is_selected("ping_mbulk") || test_is_selected("ping")) {
-            len = redisFormatCommand(&cmd,"PING");
+            len[0] = redisFormatCommand(&cmd[0],"PING");
             benchmark("PING_BULK",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("set")) {
-            len = redisFormatCommand(&cmd,"SET key:__rand_int__ %s",data);
+            config.randomsize = (config.datasize_max > config.datasize);
+            len[0] = redisFormatCommand(&cmd[0],"SET key:__rand_int__ %s",data);
             benchmark("SET",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("get")) {
-            len = redisFormatCommand(&cmd,"GET key:__rand_int__");
+            len[0] = redisFormatCommand(&cmd[0],"GET key:__rand_int__");
             benchmark("GET",cmd,len);
-            free(cmd);
+            free(cmd[0]);
+        }
+
+        if (test_is_selected("mixed")) {
+            config.randomsize = (config.datasize_max > config.datasize);
+            config.cmdnum = 2;
+            len[0] = redisFormatCommand(&cmd[0],"GET key:__rand_int__");
+            len[1] = redisFormatCommand(&cmd[1],"SET key:__rand_int__ %s",data);
+            benchmark("MIXED",cmd,len);
+            free(cmd[0]);
+            free(cmd[1]);
         }
 
         if (test_is_selected("incr")) {
-            len = redisFormatCommand(&cmd,"INCR counter:__rand_int__");
+            len[0] = redisFormatCommand(&cmd[0],"INCR counter:__rand_int__");
             benchmark("INCR",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("lpush")) {
-            len = redisFormatCommand(&cmd,"LPUSH mylist %s",data);
+            len[0] = redisFormatCommand(&cmd[0],"LPUSH mylist %s",data);
             benchmark("LPUSH",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("lpop")) {
-            len = redisFormatCommand(&cmd,"LPOP mylist");
+            len[0] = redisFormatCommand(&cmd[0],"LPOP mylist");
             benchmark("LPOP",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("sadd")) {
-            len = redisFormatCommand(&cmd,
+            len[0] = redisFormatCommand(&cmd[0],
                 "SADD myset element:__rand_int__");
             benchmark("SADD",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("spop")) {
-            len = redisFormatCommand(&cmd,"SPOP myset");
+            len[0] = redisFormatCommand(&cmd[0],"SPOP myset");
             benchmark("SPOP",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("lrange") ||
@@ -763,33 +986,33 @@ int main(int argc, const char **argv) {
             test_is_selected("lrange_500") ||
             test_is_selected("lrange_600"))
         {
-            len = redisFormatCommand(&cmd,"LPUSH mylist %s",data);
+            len[0] = redisFormatCommand(&cmd[0],"LPUSH mylist %s",data);
             benchmark("LPUSH (needed to benchmark LRANGE)",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_100")) {
-            len = redisFormatCommand(&cmd,"LRANGE mylist 0 99");
+            len[0] = redisFormatCommand(&cmd[0],"LRANGE mylist 0 99");
             benchmark("LRANGE_100 (first 100 elements)",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_300")) {
-            len = redisFormatCommand(&cmd,"LRANGE mylist 0 299");
+            len[0] = redisFormatCommand(&cmd[0],"LRANGE mylist 0 299");
             benchmark("LRANGE_300 (first 300 elements)",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_500")) {
-            len = redisFormatCommand(&cmd,"LRANGE mylist 0 449");
+            len[0] = redisFormatCommand(&cmd[0],"LRANGE mylist 0 449");
             benchmark("LRANGE_500 (first 450 elements)",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_600")) {
-            len = redisFormatCommand(&cmd,"LRANGE mylist 0 599");
+            len[0] = redisFormatCommand(&cmd[0],"LRANGE mylist 0 599");
             benchmark("LRANGE_600 (first 600 elements)",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (test_is_selected("mset")) {
@@ -799,9 +1022,9 @@ int main(int argc, const char **argv) {
                 argv[i] = "key:__rand_int__";
                 argv[i+1] = data;
             }
-            len = redisFormatCommandArgv(&cmd,21,argv,NULL);
+            len[0] = redisFormatCommandArgv(&cmd[0],21,argv,NULL);
             benchmark("MSET (10 keys)",cmd,len);
-            free(cmd);
+            free(cmd[0]);
         }
 
         if (!config.csv) printf("\n");

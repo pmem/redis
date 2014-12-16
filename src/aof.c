@@ -150,6 +150,32 @@ ssize_t aofRewriteBufferWrite(int fd) {
     return count;
 }
 
+#ifdef USE_NVML
+ssize_t aofRewriteBufferWritePMEMlog(PMEMlogpool* plp) {
+    listNode *ln;
+    listIter li;
+    ssize_t count = 0;
+    int appended_bytes;
+
+    listRewind(server.aof_rewrite_buf_blocks,&li);
+    while((ln = listNext(&li))) {
+        aofrwblock *block = listNodeValue(ln);
+
+        if (block->used) {
+
+            appended_bytes = pmemlog_append(plp, block->buf, block->used);
+            if (appended_bytes == -1) {
+                redisLog(REDIS_ERR, "Error appending AOF NVML diff: %s", strerror(errno));
+                return -1;
+            }
+
+            count += block->used;
+        }
+    }
+    return count;
+}
+#endif
+
 /* ----------------------------------------------------------------------------
  * AOF file implementation
  * ------------------------------------------------------------------------- */
@@ -160,15 +186,132 @@ void aof_background_fsync(int fd) {
     bioCreateBackgroundJob(REDIS_BIO_AOF_FSYNC,(void*)(long)fd,NULL,NULL);
 }
 
+#ifdef USE_NVML
+/* Open additional PMEMlog file, which will be used for rewrites, both files
+ * will be available at launch, when rewrite will be triggered, then rewr pool
+ * will be populated with fresh data, buffer will be appended and pointers of
+ * pools will be exchanged */
+int openAppendOnlyFileREWR(void) {
+    int rewr_len;
+    struct redis_stat sb;
+    /* server.aof_filename + '_rewr' + '\0' */
+    rewr_len = strlen(server.aof_filename) + 6;
+    server.aof_filename_rewr = (char*) zmalloc(rewr_len * sizeof(char));
+    snprintf(server.aof_filename_rewr, rewr_len, "%s_rewr", server.aof_filename);
+
+    if (redis_stat(server.aof_filename_rewr,&sb) != -1) {
+        if ((server.aof_plp_rewr = pmemlog_open(server.aof_filename_rewr)) == NULL) {
+            redisLog(REDIS_WARNING, "Redis cannot open NVML AOF REWR file: %s", strerror(errno));
+            exit(1);
+        }
+    } else {
+        if ((server.aof_plp_rewr = pmemlog_create(server.aof_filename_rewr, server.aof_nvml_log_size, 0600)) == NULL) {
+            redisLog(REDIS_WARNING, "Redis cannot create NVML AOF REWR file: %s", strerror(errno));
+            return REDIS_ERR;
+        }
+    }
+
+    return REDIS_OK;
+}
+#endif
+
+void openAppendOnlyFile(void)
+{
+    if (server.aof_fd != -1) {
+        return;
+    }
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1) {
+        /* First open regular AOF PMEMLOG pool, then pool for rewrite
+         * and if size of loaded file is different, than configured then
+         * trigger rewrite */
+
+        int stat_ret;
+        struct stat *stat_buf;
+
+        /* if file doesn't exist create it and truncate to configured size */
+        stat_buf = zmalloc(sizeof (struct stat));
+        stat_ret = stat(server.aof_filename, stat_buf);
+        if (stat_ret != 0) {
+            if (errno != ENOENT) {
+                redisLog(REDIS_WARNING, "Can't stat the AOF file: %s",
+                         strerror(errno));
+                exit(1);
+            } else {
+                // file don't exist: create it
+                if ((server.aof_plp = pmemlog_create(server.aof_filename, server.aof_nvml_log_size, 0600)) == NULL) {
+                    redisLog(REDIS_WARNING, "Redis cannot create NVML AOF file: %s", strerror(errno));
+                    exit(1);
+                }
+            }
+        } else {
+            // file exists: open it
+            if ((server.aof_plp = pmemlog_open(server.aof_filename)) == NULL) {
+                redisLog(REDIS_WARNING, "Redis cannot open NVML AOF file: %s", strerror(errno));
+                exit(1);
+            }
+        }
+        zfree(stat_buf);
+
+        openAppendOnlyFileREWR();
+
+        aofUpdateCurrentSize();
+    } else {
+#endif
+        /* Regular AOF file */
+        server.aof_fd = open(server.aof_filename, O_WRONLY|O_APPEND|O_CREAT,0644);
+        if (server.aof_fd == -1) {
+            redisLog(REDIS_WARNING, "Can't open the append-only file: %s", strerror(errno));
+            exit(1);
+        }
+#ifdef USE_NVML
+    }
+#endif
+}
+
+#ifdef USE_NVML
+void closeAppendOnlyFileREWR(void) {
+    if (server.aof_plp_rewr != NULL) {
+        pmemlog_close(server.aof_plp_rewr);
+        server.aof_plp_rewr = NULL;
+
+        close(server.aof_fd_rewr);
+        server.aof_fd_rewr = -1;
+    }
+}
+#endif
+
+int closeAppendOnlyFile(void)
+{
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1
+            && server.aof_plp != NULL) {
+        pmemlog_close(server.aof_plp);
+        server.aof_plp = NULL;
+
+        closeAppendOnlyFileREWR();
+    } else {
+#endif
+        /* Append only file: fsync() the AOF and exit */
+        redisLog(REDIS_NOTICE,"Calling fsync() on the AOF file before closing it.");
+        aof_fsync(server.aof_fd);
+#ifdef USE_NVML
+    }
+#endif
+
+    close(server.aof_fd);
+    server.aof_fd = -1;
+
+    return REDIS_OK;
+}
+
 /* Called when the user switches from "appendonly yes" to "appendonly no"
  * at runtime using the CONFIG command. */
 void stopAppendOnly(void) {
     redisAssert(server.aof_state != REDIS_AOF_OFF);
     flushAppendOnlyFile(1);
-    aof_fsync(server.aof_fd);
-    close(server.aof_fd);
+    closeAppendOnlyFile();
 
-    server.aof_fd = -1;
     server.aof_selected_db = -1;
     server.aof_state = REDIS_AOF_OFF;
     /* rewrite operation in progress? kill it, wait child exit */
@@ -191,14 +334,14 @@ void stopAppendOnly(void) {
  * at runtime using the CONFIG command. */
 int startAppendOnly(void) {
     server.aof_last_fsync = server.unixtime;
-    server.aof_fd = open(server.aof_filename,O_WRONLY|O_APPEND|O_CREAT,0644);
     redisAssert(server.aof_state == REDIS_AOF_OFF);
+    openAppendOnlyFile();
     if (server.aof_fd == -1) {
         redisLog(REDIS_WARNING,"Redis needs to enable the AOF but can't open the append only file: %s",strerror(errno));
         return REDIS_ERR;
     }
     if (rewriteAppendOnlyFileBackground() == REDIS_ERR) {
-        close(server.aof_fd);
+        closeAppendOnlyFile();
         redisLog(REDIS_WARNING,"Redis needs to enable the AOF but can't trigger a background AOF rewrite operation. Check the above logs for more info about the error.");
         return REDIS_ERR;
     }
@@ -234,30 +377,36 @@ void flushAppendOnlyFile(int force) {
 
     if (sdslen(server.aof_buf) == 0) return;
 
-    if (server.aof_fsync == AOF_FSYNC_EVERYSEC)
-        sync_in_progress = bioPendingJobsOfType(REDIS_BIO_AOF_FSYNC) != 0;
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 0) {
+#endif
+        if (server.aof_fsync == AOF_FSYNC_EVERYSEC)
+            sync_in_progress = bioPendingJobsOfType(REDIS_BIO_AOF_FSYNC) != 0;
 
-    if (server.aof_fsync == AOF_FSYNC_EVERYSEC && !force) {
-        /* With this append fsync policy we do background fsyncing.
-         * If the fsync is still in progress we can try to delay
-         * the write for a couple of seconds. */
-        if (sync_in_progress) {
-            if (server.aof_flush_postponed_start == 0) {
-                /* No previous write postponing, remember that we are
-                 * postponing the flush and return. */
-                server.aof_flush_postponed_start = server.unixtime;
-                return;
-            } else if (server.unixtime - server.aof_flush_postponed_start < 2) {
-                /* We were already waiting for fsync to finish, but for less
-                 * than two seconds this is still ok. Postpone again. */
-                return;
+        if (server.aof_fsync == AOF_FSYNC_EVERYSEC && !force) {
+            /* With this append fsync policy we do background fsyncing.
+             * If the fsync is still in progress we can try to delay
+             * the write for a couple of seconds. */
+            if (sync_in_progress) {
+                if (server.aof_flush_postponed_start == 0) {
+                    /* No previous write postponing, remember that we are
+                     * postponing the flush and return. */
+                    server.aof_flush_postponed_start = server.unixtime;
+                    return;
+                } else if (server.unixtime - server.aof_flush_postponed_start < 2) {
+                    /* We were already waiting for fsync to finish, but for less
+                     * than two seconds this is still ok. Postpone again. */
+                    return;
+                }
+                /* Otherwise fall trough, and go write since we can't wait
+                 * over two seconds. */
+                server.aof_delayed_fsync++;
+                redisLog(REDIS_NOTICE, "Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down Redis.");
             }
-            /* Otherwise fall trough, and go write since we can't wait
-             * over two seconds. */
-            server.aof_delayed_fsync++;
-            redisLog(REDIS_NOTICE,"Asynchronous AOF fsync is taking too long (disk is busy?). Writing the AOF buffer without waiting for fsync to complete, this may slow down Redis.");
         }
+#ifdef USE_NVML
     }
+#endif
     /* We want to perform a single write. This should be guaranteed atomic
      * at least if the filesystem we are writing is a real physical one.
      * While this will save us against the server being killed I don't think
@@ -265,7 +414,45 @@ void flushAppendOnlyFile(int force) {
      * or alike */
 
     latencyStartMonitor(latency);
-    nwritten = write(server.aof_fd,server.aof_buf,sdslen(server.aof_buf));
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1) {
+        size_t len = sdslen(server.aof_buf);
+        size_t newlen = server.aof_current_size + len;
+
+        /* Check if there's required space, if not try to rewrite first */
+        if (newlen > server.aof_nvml_log_size)
+        {
+            /* if there's not enough space try to compact AOF file */
+            redisLog(REDIS_ERR, "Not enough space to write AOF file");
+            redisLog(REDIS_NOTICE, "Starting background rewrite of AOF file");
+            if (rewriteAppendOnlyFileBackground() != REDIS_OK) {
+                redisLog(REDIS_ERR, "Starting background rewrite of AOF file failed!");
+            }
+            nwritten = -1;
+            errno = ENOSPC;
+        } else {
+            if (!pmemlog_append(server.aof_plp, server.aof_buf, len)) {
+                nwritten = len;
+
+                /* if reached threshold for AOF rewrite it */
+                if (server.aof_rewrite_perc > 0 &&
+                        server.aof_current_size > (server.aof_nvml_log_size *
+                                               server.aof_rewrite_perc / 100)) {
+                    redisLog(REDIS_NOTICE, "Starting background rewrite of AOF file");
+                    if (rewriteAppendOnlyFileBackground() != REDIS_OK) {
+                        redisLog(REDIS_ERR, "Starting background rewrite of AOF file failed!");
+                    }
+                }
+            } else {
+                nwritten = -1;
+            }
+        }
+    } else {
+#endif
+        nwritten = write(server.aof_fd,server.aof_buf,sdslen(server.aof_buf));
+#ifdef USE_NVML
+    }
+#endif
     latencyEndMonitor(latency);
     /* We want to capture different events for delayed writes:
      * when the delay happens with a pending fsync, or with a saving child
@@ -374,19 +561,25 @@ void flushAppendOnlyFile(int force) {
             return;
 
     /* Perform the fsync if needed. */
-    if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
-        /* aof_fsync is defined as fdatasync() for Linux in order to avoid
-         * flushing metadata. */
-        latencyStartMonitor(latency);
-        aof_fsync(server.aof_fd); /* Let's try to get this data on the disk */
-        latencyEndMonitor(latency);
-        latencyAddSampleIfNeeded("aof-fsync-always",latency);
-        server.aof_last_fsync = server.unixtime;
-    } else if ((server.aof_fsync == AOF_FSYNC_EVERYSEC &&
-                server.unixtime > server.aof_last_fsync)) {
-        if (!sync_in_progress) aof_background_fsync(server.aof_fd);
-        server.aof_last_fsync = server.unixtime;
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 0) {
+#endif
+        if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
+            /* aof_fsync is defined as fdatasync() for Linux in order to avoid
+             * flushing metadata. */
+            latencyStartMonitor(latency);
+            aof_fsync(server.aof_fd); /* Let's try to get this data on the disk */
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("aof-fsync-always",latency);
+            server.aof_last_fsync = server.unixtime;
+        } else if ((server.aof_fsync == AOF_FSYNC_EVERYSEC &&
+                    server.unixtime > server.aof_last_fsync)) {
+            if (!sync_in_progress) aof_background_fsync(server.aof_fd);
+            server.aof_last_fsync = server.unixtime;
+        }
+#ifdef USE_NVML
     }
+#endif
 }
 
 sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
@@ -489,14 +682,51 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
      * of re-entering the event loop, so before the client will get a
      * positive reply about the operation performed. */
     if (server.aof_state == REDIS_AOF_ON)
-        server.aof_buf = sdscatlen(server.aof_buf,buf,sdslen(buf));
+    {
+#ifdef USE_NVML
+        if (server.aof_use_nvml == 1 && server.aof_nvml_direct == 1) {
+            size_t len = sdslen(buf);
+            size_t newlen = server.aof_current_size + len;
 
-    /* If a background append only file rewriting is in progress we want to
-     * accumulate the differences between the child DB and the current one
-     * in a buffer, so that when the child process will do its work we
-     * can append the differences to the new append only file. */
-    if (server.aof_child_pid != -1)
-        aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
+            /* Check if there's required space, if not try to rewrite first */
+            if (newlen > server.aof_nvml_log_size)
+            {
+                /* if there's not enough space try to compact AOF file */
+                redisLog(REDIS_ERR, "Not enough space to write AOF file");
+                redisLog(REDIS_NOTICE, "Starting background rewrite of AOF file");
+                if (rewriteAppendOnlyFileBackground() != REDIS_OK) {
+                    redisLog(REDIS_ERR, "Starting background rewrite of AOF file failed!");
+                }
+                errno = ENOSPC;
+            } else {
+                if (!pmemlog_append(server.aof_plp, buf, len)) {
+                    server.aof_current_size += len;
+                } else {
+                    redisLog(REDIS_WARNING,"Error writing to the AOF file: %s",
+                        strerror(errno));
+
+                    /* fallback to buffer when write failed */
+                    server.aof_buf = sdscatlen(server.aof_buf,buf,sdslen(buf));
+                }
+            }
+        } else {
+#endif
+            server.aof_buf = sdscatlen(server.aof_buf,buf,sdslen(buf));
+#ifdef USE_NVML
+        }
+#endif
+    }
+
+#ifdef USE_NVML
+    /* If aof_use_nvml is in direct mode it didn't use append buffer */
+    if (!(server.aof_use_nvml == 1 && server.aof_nvml_direct == 1))
+#endif
+        /* If a background append only file rewriting is in progress we want to
+         * accumulate the differences between the child DB and the current one
+         * in a buffer, so that when the child process will do its work we
+         * can append the differences to the new append only file. */
+        if (server.aof_child_pid != -1)
+            aofRewriteBufferAppend((unsigned char*)buf,sdslen(buf));
 
     sdsfree(buf);
 }
@@ -702,6 +932,142 @@ fmterr: /* Format error. */
     redisLog(REDIS_WARNING,"Bad file format reading the append only file: make a backup of your AOF file, then use ./redis-check-aof --fix <filename>");
     exit(1);
 }
+
+#ifdef USE_NVML
+/* Callback for pmemlog_walk function */
+int loadPMEMLogbuffer(const void *buf, size_t buflen, void *arg) {
+    struct redisClient *fakeClient;
+    char *bufchar = (char*) buf;
+    const char *endptr = bufchar + buflen; /* end of load buffer */
+    char *tmpptr;
+    long loops = 0;
+    char tmpbuf[32];
+
+    fakeClient = createFakeClient();
+
+    while (bufchar < endptr) {
+        int argc, j;
+        //size_t buflen;
+        unsigned long len;
+        robj **argv;
+        sds argsds;
+        struct redisCommand *cmd;
+
+        if (!(loops++ % 1000)) {
+            processEventsWhileBlocked();
+        }
+
+        tmpptr = strpbrk(bufchar, "\r");
+        len = tmpptr - bufchar;
+        if (len  > 32) goto fmterr;
+        strncpy(tmpbuf, bufchar, len);
+        tmpbuf[len] = '\0';
+
+        if (tmpbuf[0] != '*') goto fmterr;
+        argc = atoi(tmpbuf+1);
+        if (argc < 1) goto fmterr;
+
+        bufchar = tmpptr + 2 * sizeof(char);
+        if (bufchar > endptr) goto fmterr;
+
+        argv = zmalloc(sizeof(robj*)*argc);
+        for (j = 0; j < argc; j++) {
+            tmpptr = strpbrk(bufchar, "\r");
+            len = tmpptr - bufchar;
+            if (len > 32) goto fmterr;
+            strncpy(tmpbuf, bufchar, len);
+            tmpbuf[len] = '\0';
+
+            if (tmpbuf[0] != '$') goto fmterr;
+            len = strtol(tmpbuf+1,NULL,10);
+            argsds = sdsnewlen(NULL,len);
+            bufchar = tmpptr + 2 * sizeof(char);
+            if (bufchar > endptr) goto fmterr;
+
+            tmpptr = strpbrk(bufchar, "\r");
+            memcpy(argsds, bufchar, sizeof(char) * len);
+            bufchar = tmpptr + 2 * sizeof(char);
+            if (bufchar > endptr) goto fmterr;
+
+            argv[j] = createObject(REDIS_STRING,argsds);
+        }
+
+        /* Command lookup */
+        cmd = lookupCommand(argv[0]->ptr);
+        if (!cmd) {
+            redisLog(REDIS_WARNING,"Unknown command '%s' reading the append only file", (char*)argv[0]->ptr);
+            exit(1);
+        }
+        /* Run the command in the context of a fake client */
+        fakeClient->argc = argc;
+        fakeClient->argv = argv;
+        cmd->proc(fakeClient);
+
+        /* The fake client should not have a reply */
+        redisAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
+        /* The fake client should never get blocked */
+        redisAssert((fakeClient->flags & REDIS_BLOCKED) == 0);
+
+        /* Clean up. Command code may have changed argv/argc so we use the
+         * argv/argc of the client instead of the local variables. */
+        for (j = 0; j < fakeClient->argc; j++)
+            decrRefCount(fakeClient->argv[j]);
+        zfree(fakeClient->argv);
+    }
+
+    freeFakeClient(fakeClient);
+    return 0;
+
+fmterr:
+    redisLog(REDIS_WARNING,"Bad file format reading the append only file: make a backup of your AOF file, then use ./redis-check-aof --fix <filename>");
+    exit(1);
+}
+
+
+/* Replay the append log file. On error REDIS_OK is returned. On non fatal
+ * error (the append only file is zero-length) REDIS_ERR is returned. On
+ * fatal error an error message is logged and the program exists. */
+int loadAppendOnlyFilePMEMlog() {
+    int old_aof_state = server.aof_state;
+
+    /* We're loading the data from an open AOF. */
+    if (server.aof_current_size == 0) {
+        redisLog(REDIS_WARNING,"Empty AOF file (size == 0)");
+        return REDIS_OK;
+    }
+
+    if (server.aof_plp == NULL) {
+        redisLog(REDIS_WARNING,"Incorrect mapped AOF NVML pointer (NULL)");
+        return REDIS_ERR;
+    }
+
+    /* Temporarily disable AOF, to prevent EXEC from feeding a MULTI
+     * to the same file we're about to read. */
+    server.aof_state = REDIS_AOF_OFF;
+
+    /* Load the DB */
+    server.loading = 1;
+    server.loading_start_time = time(NULL);
+    server.loading_total_bytes = server.aof_current_size;
+
+    /* If aof_mmap is enabled, the AOF file is already open and mmap'ed at initServer(). */
+    pmemlog_walk(server.aof_plp, 0, loadPMEMLogbuffer, NULL);
+
+    /* Do not unmap/close the AOF file! */
+
+    server.aof_state = old_aof_state;
+    stopLoading();
+
+    aofUpdateCurrentSize();
+    server.aof_rewrite_base_size = server.aof_current_size;
+
+    if (server.aof_trigger_rewrite) {
+        server.aof_trigger_rewrite = 0;
+        rewriteAppendOnlyFileBackground();
+    }
+    return REDIS_OK;
+}
+#endif
 
 /* ----------------------------------------------------------------------------
  * AOF rewrite
@@ -968,18 +1334,27 @@ int rewriteAppendOnlyFile(char *filename) {
     int j;
     long long now = mstime();
 
-    /* Note that we have to use a different temp name here compared to the
-     * one used by rewriteAppendOnlyFileBackground() function. */
-    snprintf(tmpfile,256,"temp-rewriteaof-%d.aof", (int) getpid());
-    fp = fopen(tmpfile,"w");
-    if (!fp) {
-        redisLog(REDIS_WARNING, "Opening the temp file for AOF rewrite in rewriteAppendOnlyFile(): %s", strerror(errno));
-        return REDIS_ERR;
-    }
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1) {
+        rioInitWithPMEMLog(&aof, server.aof_plp_rewr);
+    } else {
+#endif
+        /*  Note that we have to use a different temp name here compared to the
+         * one used by rewriteAppendOnlyFileBackground() function. */
+        snprintf(tmpfile,256,"temp-rewriteaof-%d.aof", (int) getpid());
+        fp = fopen(tmpfile,"w");
+        if (!fp) {
+            redisLog(REDIS_WARNING, "Opening the temp file for AOF rewrite in rewriteAppendOnlyFile(): %s", strerror(errno));
+            return REDIS_ERR;
+        }
 
-    rioInitWithFile(&aof,fp);
-    if (server.aof_rewrite_incremental_fsync)
-        rioSetAutoSync(&aof,REDIS_AOF_AUTOSYNC_BYTES);
+        rioInitWithFile(&aof,fp);
+        if (server.aof_rewrite_incremental_fsync)
+            rioSetAutoSync(&aof,REDIS_AOF_AUTOSYNC_BYTES);
+#ifdef USE_NVML
+     }
+#endif
+
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         redisDb *db = server.db+j;
@@ -1040,24 +1415,46 @@ int rewriteAppendOnlyFile(char *filename) {
         dictReleaseIterator(di);
     }
 
-    /* Make sure data will not remain on the OS's output buffers */
-    if (fflush(fp) == EOF) goto werr;
-    if (fsync(fileno(fp)) == -1) goto werr;
-    if (fclose(fp) == EOF) goto werr;
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1) {
+        if (server.aof_state == REDIS_AOF_OFF) {
+            closeAppendOnlyFile();
+        }
+    } else {
+#endif
+        /* Make sure data will not remain on the OS's output buffers */
+        if (fflush(fp) == EOF) goto werr;
+        if (fsync(fileno(fp)) == -1) goto werr;
+        if (fclose(fp) == EOF) goto werr;
 
-    /* Use RENAME to make sure the DB file is changed atomically only
-     * if the generate DB file is ok. */
-    if (rename(tmpfile,filename) == -1) {
-        redisLog(REDIS_WARNING,"Error moving temp append only file on the final destination: %s", strerror(errno));
-        unlink(tmpfile);
-        return REDIS_ERR;
-    }
+        /* Use RENAME to make sure the DB file is changed atomically only
+         * if the generate DB file is ok. */
+        if (rename(tmpfile,filename) == -1) {
+            redisLog(REDIS_WARNING,"Error moving temp append only file on the final destination: %s", strerror(errno));
+            unlink(tmpfile);
+            return REDIS_ERR;
+        }
+#ifdef USE_NVML
+     }
+#endif
     redisLog(REDIS_NOTICE,"SYNC append only file rewrite performed");
     return REDIS_OK;
 
 werr:
-    fclose(fp);
-    unlink(tmpfile);
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1) {
+        if (server.aof_state == REDIS_AOF_OFF) {
+            closeAppendOnlyFile();
+        } else {
+            pmemlog_rewind(server.aof_plp_rewr);
+        }
+    } else {
+#endif
+        fclose(fp);
+        unlink(tmpfile);
+#ifdef USE_NVML
+    }
+#endif
     redisLog(REDIS_WARNING,"Write error writing append only file on disk: %s", strerror(errno));
     if (di) dictReleaseIterator(di);
     return REDIS_ERR;
@@ -1081,6 +1478,17 @@ int rewriteAppendOnlyFileBackground(void) {
 
     if (server.aof_child_pid != -1) return REDIS_ERR;
     start = ustime();
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1) {
+        if (server.aof_state == REDIS_AOF_OFF && server.aof_fd == -1) {
+            openAppendOnlyFile();
+        }
+
+        if (server.aof_nvml_direct == 1) {
+            server.aof_nvml_direct_pos = pmemlog_tell(server.aof_plp);
+        }
+    }
+#endif
     if ((childpid = fork()) == 0) {
         char tmpfile[256];
 
@@ -1157,6 +1565,12 @@ void aofUpdateCurrentSize(void) {
     mstime_t latency;
 
     latencyStartMonitor(latency);
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1) {
+        if (server.aof_plp != NULL)
+            server.aof_current_size = pmemlog_tell(server.aof_plp);
+    } else
+#endif
     if (redis_fstat(server.aof_fd,&sb) == -1) {
         redisLog(REDIS_WARNING,"Unable to obtain the AOF file length. stat: %s",
             strerror(errno));
@@ -1166,6 +1580,20 @@ void aofUpdateCurrentSize(void) {
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("aof-fstat",latency);
 }
+
+#ifdef USE_NVML
+/* Copy difference between PMEMLOG pools */
+int copyPMEMLogDiff(const void *buf, size_t end, void *arg) {
+    buf = buf + server.aof_nvml_direct_pos;
+    if (pmemlog_append(server.aof_plp_rewr, buf, end - server.aof_nvml_direct_pos) == -1) {
+        redisLog(REDIS_WARNING, "I/O error at applying diff to rewriten AOF: %s, from: %zu to: %zu",
+                strerror(errno), server.aof_nvml_direct_pos, end);
+        return 1;
+    }
+
+    return 0;
+}
+#endif
 
 /* A background append only file rewriting (BGREWRITEAOF) terminated its work.
  * Handle this. */
@@ -1184,99 +1612,177 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         latencyStartMonitor(latency);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof",
             (int)server.aof_child_pid);
-        newfd = open(tmpfile,O_WRONLY|O_APPEND);
-        if (newfd == -1) {
-            redisLog(REDIS_WARNING,
-                "Unable to open the temporary AOF produced by the child: %s", strerror(errno));
-            goto cleanup;
-        }
 
-        if (aofRewriteBufferWrite(newfd) == -1) {
-            redisLog(REDIS_WARNING,
-                "Error trying to flush the parent diff to the rewritten AOF: %s", strerror(errno));
-            close(newfd);
-            goto cleanup;
-        }
-        latencyEndMonitor(latency);
-        latencyAddSampleIfNeeded("aof-rewrite-diff-write",latency);
+#ifdef USE_NVML
+        if (server.aof_use_nvml == 1) {
+            /*size_t real_log_rewr_size; */
+            if (server.aof_nvml_direct == 1) {
+                pmemlog_walk(server.aof_plp, 0, copyPMEMLogDiff, NULL);
+            } else {
+                if (aofRewriteBufferWritePMEMlog(server.aof_plp_rewr) == -1) {
+                    redisLog(REDIS_WARNING,
+                        "Error trying to flush the parent diff to the rewritten AOF: %s", strerror(errno));
+                    goto cleanup;
+                }
+            }
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("aof-rewrite-diff-write",latency);
 
-        redisLog(REDIS_NOTICE,
-            "Parent diff successfully flushed to the rewritten AOF (%lu bytes)", aofRewriteBufferSize());
+            redisLog(REDIS_NOTICE,
+                "Parent diff successfully flushed to the rewritten AOF (%lu bytes)", aofRewriteBufferSize());
 
-        /* The only remaining thing to do is to rename the temporary file to
-         * the configured file and switch the file descriptor used to do AOF
-         * writes. We don't want close(2) or rename(2) calls to block the
-         * server on old file deletion.
-         *
-         * There are two possible scenarios:
-         *
-         * 1) AOF is DISABLED and this was a one time rewrite. The temporary
-         * file will be renamed to the configured file. When this file already
-         * exists, it will be unlinked, which may block the server.
-         *
-         * 2) AOF is ENABLED and the rewritten AOF will immediately start
-         * receiving writes. After the temporary file is renamed to the
-         * configured file, the original AOF file descriptor will be closed.
-         * Since this will be the last reference to that file, closing it
-         * causes the underlying file to be unlinked, which may block the
-         * server.
-         *
-         * To mitigate the blocking effect of the unlink operation (either
-         * caused by rename(2) in scenario 1, or by close(2) in scenario 2), we
-         * use a background thread to take care of this. First, we
-         * make scenario 1 identical to scenario 2 by opening the target file
-         * when it exists. The unlink operation after the rename(2) will then
-         * be executed upon calling close(2) for its descriptor. Everything to
-         * guarantee atomicity for this switch has already happened by then, so
-         * we don't care what the outcome or duration of that close operation
-         * is, as long as the file descriptor is released again. */
-        if (server.aof_fd == -1) {
-            /* AOF disabled */
+            /* swap filenames, swap fd's  and plp's */
+            latencyStartMonitor(latency);
+            snprintf(tmpfile, 256, "aof-rewrite-swap-%d.aof", getpid());
+            if (rename (server.aof_filename, tmpfile) == -1) {
+                redisLog(REDIS_WARNING, "Redis cannot rename AOF to temporary file: %s",
+                        strerror(errno));
+                goto cleanup;
+            }
+            if (rename(server.aof_filename_rewr, server.aof_filename) == -1) {
+                redisLog(REDIS_WARNING, "Redis cannot rename AOF rewrite file to AOF: %s",
+                        strerror(errno));
+                goto cleanup;
+            }
+            if (rename(tmpfile, server.aof_filename_rewr) == -1) {
+                redisLog(REDIS_WARNING, "Redis cannot rename temporary file to AOF rewrite: %s",
+                        strerror(errno));
+                goto cleanup;
+            }
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("aof-rename",latency);
 
-             /* Don't care if this fails: oldfd will be -1 and we handle that.
-              * One notable case of -1 return is if the old file does
-              * not exist. */
-             oldfd = open(server.aof_filename,O_RDONLY|O_NONBLOCK);
+            if (server.aof_state != REDIS_AOF_OFF) {
+                oldfd = server.aof_fd;
+                server.aof_fd = server.aof_fd_rewr;
+                server.aof_fd_rewr = oldfd;
+
+                PMEMlogpool *tmp_plp = server.aof_plp;
+                server.aof_plp = server.aof_plp_rewr;
+                server.aof_plp_rewr = tmp_plp;
+
+                /* compute real size of rewrite file, if it's different, than configured
+                 * the reopen file */
+                if ((pmemlog_tell(server.aof_plp) + pmemlog_nbyte(server.aof_plp)) !=
+                            (pmemlog_tell(server.aof_plp_rewr) + pmemlog_nbyte(server.aof_plp_rewr))) {
+                    /* when file will be reopened then will be truncated to the new
+                     * size */
+                    closeAppendOnlyFileREWR();
+                    openAppendOnlyFileREWR();
+                } else {
+                    /* rewind rewrite pool */
+                    pmemlog_rewind(server.aof_plp_rewr);
+                }
+                server.aof_selected_db = -1; /* Make sure SELECT is re-issued */
+                aofUpdateCurrentSize();
+                server.aof_rewrite_base_size = server.aof_current_size;
+                /* Clear regular AOF buffer since its contents was just written to
+                 * the new AOF from the background rewrite buffer. */
+                sdsfree(server.aof_buf);
+                server.aof_buf = sdsempty();
+            }
+
+            /* we don't want to trigger closing aof_fd_rewr in background */
+            oldfd = -1;
         } else {
-            /* AOF enabled */
-            oldfd = -1; /* We'll set this to the current AOF filedes later. */
+#endif
+            newfd = open(tmpfile,O_WRONLY|O_APPEND);
+            if (newfd == -1) {
+                   redisLog(REDIS_WARNING,
+                                "Unable to open the temporary AOF produced by the child: %s", strerror(errno));
+                    goto cleanup;
+            }
+
+            if (aofRewriteBufferWrite(newfd) == -1) {
+                    redisLog(REDIS_WARNING,
+                                "Error trying to flush the parent diff to the rewritten AOF: %s", strerror(errno));
+                    close(newfd);
+                    goto cleanup;
+            }
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("aof-rewrite-diff-write",latency);
+
+                  redisLog(REDIS_NOTICE,
+                                "Parent diff successfully flushed to the rewritten AOF (%lu bytes)", aofRewriteBufferSize());
+
+            /* The only remaining thing to do is to rename the temporary file to
+             * the configured file and switch the file descriptor used to do AOF
+             * writes. We don't want close(2) or rename(2) calls to block the
+             * server on old file deletion.
+             *
+             * There are two possible scenarios:
+             *
+             * 1) AOF is DISABLED and this was a one time rewrite. The temporary
+             * file will be renamed to the configured file. When this file already
+             * exists, it will be unlinked, which may block the server.
+             *
+             * 2) AOF is ENABLED and the rewritten AOF will immediately start
+             * receiving writes. After the temporary file is renamed to the
+             * configured file, the original AOF file descriptor will be closed.
+             * Since this will be the last reference to that file, closing it
+             * causes the underlying file to be unlinked, which may block the
+             * server.
+             *
+             * To mitigate the blocking effect of the unlink operation (either
+             * caused by rename(2) in scenario 1, or by close(2) in scenario 2), we
+             * use a background thread to take care of this. First, we
+             * make scenario 1 identical to scenario 2 by opening the target file
+             * when it exists. The unlink operation after the rename(2) will then
+             * be executed upon calling close(2) for its descriptor. Everything to
+             * guarantee atomicity for this switch has already happened by then, so
+             * we don't care what the outcome or duration of that close operation
+             * is, as long as the file descriptor is released again. */
+            if (server.aof_fd == -1) {
+                /* AOF disabled */
+
+                /* Don't care if this fails: oldfd will be -1 and we handle that.
+                 * One notable case of -1 return is if the old file does
+                 * not exist. */
+                 oldfd = open(server.aof_filename,O_RDONLY|O_NONBLOCK);
+            } else {
+                /* AOF enabled */
+                oldfd = -1; /* We'll set this to the current AOF filedes later. */
+            }
+
+            /* Rename the temporary file. This will not unlink the target file if
+             * it exists, because we reference it with "oldfd". */
+            latencyStartMonitor(latency);
+            if (rename(tmpfile,server.aof_filename) == -1) {
+                redisLog(REDIS_WARNING,
+                        "Error trying to rename the temporary AOF file: %s", strerror(errno));
+                close(newfd);
+                if (oldfd != -1) close(oldfd);
+                    goto cleanup;
+            }
+            latencyEndMonitor(latency);
+            latencyAddSampleIfNeeded("aof-rename",latency);
+
+            if (server.aof_fd == -1) {
+                /* AOF disabled, we don't need to set the AOF file descriptor
+                  * to this new file, so we can close it. */
+                close(newfd);
+            } else {
+                /* AOF enabled, replace the old fd with the new one. */
+                oldfd = server.aof_fd;
+                server.aof_fd = newfd;
+
+                if (server.aof_fsync == AOF_FSYNC_ALWAYS)
+                    aof_fsync(newfd);
+                else if (server.aof_fsync == AOF_FSYNC_EVERYSEC)
+                    aof_background_fsync(newfd);
+
+                server.aof_selected_db = -1; /* Make sure SELECT is re-issued */
+                aofUpdateCurrentSize();
+                server.aof_rewrite_base_size = server.aof_current_size;
+
+                /* Clear regular AOF buffer since its contents was just written to
+                 * the new AOF from the background rewrite buffer. */
+                 sdsfree(server.aof_buf);
+                 server.aof_buf = sdsempty();
+            }
+#ifdef USE_NVML
         }
-
-        /* Rename the temporary file. This will not unlink the target file if
-         * it exists, because we reference it with "oldfd". */
-        latencyStartMonitor(latency);
-        if (rename(tmpfile,server.aof_filename) == -1) {
-            redisLog(REDIS_WARNING,
-                "Error trying to rename the temporary AOF file: %s", strerror(errno));
-            close(newfd);
-            if (oldfd != -1) close(oldfd);
-            goto cleanup;
-        }
-        latencyEndMonitor(latency);
-        latencyAddSampleIfNeeded("aof-rename",latency);
-
-        if (server.aof_fd == -1) {
-            /* AOF disabled, we don't need to set the AOF file descriptor
-             * to this new file, so we can close it. */
-            close(newfd);
-        } else {
-            /* AOF enabled, replace the old fd with the new one. */
-            oldfd = server.aof_fd;
-            server.aof_fd = newfd;
-            if (server.aof_fsync == AOF_FSYNC_ALWAYS)
-                aof_fsync(newfd);
-            else if (server.aof_fsync == AOF_FSYNC_EVERYSEC)
-                aof_background_fsync(newfd);
-            server.aof_selected_db = -1; /* Make sure SELECT is re-issued */
-            aofUpdateCurrentSize();
-            server.aof_rewrite_base_size = server.aof_current_size;
-
-            /* Clear regular AOF buffer since its contents was just written to
-             * the new AOF from the background rewrite buffer. */
-            sdsfree(server.aof_buf);
-            server.aof_buf = sdsempty();
-        }
-
+#endif
         server.aof_lastbgrewrite_status = REDIS_OK;
 
         redisLog(REDIS_NOTICE, "Background AOF rewrite finished successfully");
@@ -1303,7 +1809,15 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
 cleanup:
     aofRewriteBufferReset();
-    aofRemoveTempFile(server.aof_child_pid);
+#ifdef USE_NVML
+    if (server.aof_use_nvml == 1) {
+        if (server.aof_state == REDIS_AOF_OFF) {
+            closeAppendOnlyFile();
+        }
+    } else
+#endif
+        aofRemoveTempFile(server.aof_child_pid);
+
     server.aof_child_pid = -1;
     server.aof_rewrite_time_last = time(NULL)-server.aof_rewrite_time_start;
     server.aof_rewrite_time_start = -1;

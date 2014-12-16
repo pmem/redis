@@ -36,6 +36,10 @@
 #include <stdint.h>
 #include "sds.h"
 
+#ifdef USE_NVML
+#include <libpmemlog.h>
+#endif
+
 struct _rio {
     /* Backend functions.
      * Since this functions do not tolerate short writes or reads the return
@@ -81,6 +85,12 @@ struct _rio {
             off_t pos;
             sds buf;
         } fdset;
+#ifdef USE_NVML
+        /* NVML target */
+        struct {
+            PMEMlogpool *plp;
+        } pmemlog;
+#endif
     } io;
 };
 
@@ -127,6 +137,9 @@ static inline int rioFlush(rio *r) {
 void rioInitWithFile(rio *r, FILE *fp);
 void rioInitWithBuffer(rio *r, sds s);
 void rioInitWithFdset(rio *r, int *fds, int numfds);
+#ifdef USE_NVML
+void rioInitWithPMEMLog(rio* r, PMEMlogpool *plp);
+#endif
 
 size_t rioWriteBulkCount(rio *r, char prefix, int count);
 size_t rioWriteBulkString(rio *r, const char *buf, size_t len);

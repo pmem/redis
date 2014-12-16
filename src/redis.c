@@ -1350,6 +1350,16 @@ void initServerConfig(void) {
     server.aof_selected_db = -1; /* Make sure the first time will not match */
     server.aof_flush_postponed_start = 0;
     server.aof_rewrite_incremental_fsync = REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC;
+#ifdef USE_NVML
+    server.aof_use_nvml = REDIS_DEFAULT_AOF_USE_NVML;
+    server.aof_nvml_direct = REDIS_DEFAULT_AOF_NVML_DIRECT;
+    server.aof_plp = NULL;
+    server.aof_filename_rewr = NULL;
+    server.aof_fd_rewr = -1;
+    server.aof_plp_rewr = NULL;
+    server.aof_nvml_log_size = REDIS_DEFAULT_AOF_NVML_LOG_SIZE;
+    server.aof_trigger_rewrite = 0;
+#endif
     server.aof_load_truncated = REDIS_DEFAULT_AOF_LOAD_TRUNCATED;
     server.pidfile = zstrdup(REDIS_DEFAULT_PID_FILE);
     server.rdb_filename = zstrdup(REDIS_DEFAULT_RDB_FILENAME);
@@ -1754,13 +1764,7 @@ void initServer(void) {
 
     /* Open the AOF file if needed. */
     if (server.aof_state == REDIS_AOF_ON) {
-        server.aof_fd = open(server.aof_filename,
-                               O_WRONLY|O_APPEND|O_CREAT,0644);
-        if (server.aof_fd == -1) {
-            redisLog(REDIS_WARNING, "Can't open the append-only file: %s",
-                strerror(errno));
-            exit(1);
-        }
+        openAppendOnlyFile();
     }
 
     /* 32 bit instances are limited to 4GB of address space, so if there is
@@ -2217,8 +2221,10 @@ int prepareForShutdown(int flags) {
             kill(server.aof_child_pid,SIGUSR1);
         }
         /* Append only file: fsync() the AOF and exit */
-        redisLog(REDIS_NOTICE,"Calling fsync() on the AOF file.");
-        aof_fsync(server.aof_fd);
+        int err = closeAppendOnlyFile();
+        if (err != REDIS_OK) {
+            return err;
+        }
     }
     if ((server.saveparamslen > 0 && !nosave) || save) {
         redisLog(REDIS_NOTICE,"Saving the final RDB snapshot before exiting.");
@@ -3242,8 +3248,17 @@ int checkForSentinelMode(int argc, char **argv) {
 void loadDataFromDisk(void) {
     long long start = ustime();
     if (server.aof_state == REDIS_AOF_ON) {
+#ifdef USE_NVML
+        if (server.aof_use_nvml == 1) {
+            if (loadAppendOnlyFilePMEMlog() == REDIS_OK) {
+                redisLog(REDIS_NOTICE,"DB loaded from append only file: %.3f seconds",
+                    (float)(ustime()-start)/1000000);
+            }
+        } else
+#endif
         if (loadAppendOnlyFile(server.aof_filename) == REDIS_OK)
-            redisLog(REDIS_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+            redisLog(REDIS_NOTICE,"DB loaded from append only file: %.3f seconds",
+                    (float)(ustime()-start)/1000000);
     } else {
         if (rdbLoad(server.rdb_filename) == REDIS_OK) {
             redisLog(REDIS_NOTICE,"DB loaded from disk: %.3f seconds",

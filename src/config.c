@@ -334,6 +334,37 @@ void loadServerConfigFromString(char *config) {
             }
             zfree(server.aof_filename);
             server.aof_filename = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0], "aof-use-nvml") && argc == 2) {
+#ifdef USE_NVML
+            int yes;
+
+            if ((yes = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+            server.aof_use_nvml = yes;
+#else
+           redisLog(REDIS_NOTICE, "Config: \"%s\" present, but NVML support not compiled in, ignoring", argv[0]);
+#endif
+        } else if (!strcasecmp(argv[0], "aof-nvml-direct") && argc == 2) {
+#ifdef USE_NVML
+            int yes;
+
+            if ((yes = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+            server.aof_nvml_direct = yes;
+#else
+            redisLog(REDIS_NOTICE, "Config: \"%s\" present, but NVML support not compiled in, ignoring", argv[0]);
+#endif
+        } else if (!strcasecmp(argv[0], "aof-nvml-log-size") && argc == 2) {
+#ifdef USE_NVML
+            server.aof_nvml_log_size = memtoll(argv[1],NULL);
+            if (server.aof_nvml_log_size < PMEMLOG_MIN_POOL) {
+                err = "argument should be >= 2mb"; goto loaderr;
+            }
+#else
+            redisLog(REDIS_NOTICE, "Config: \"%s\" present, but NVML support not compiled in, ignoring", argv[0]);
+#endif
         } else if (!strcasecmp(argv[0],"no-appendfsync-on-rewrite")
                    && argc == 2) {
             if ((server.aof_no_fsync_on_rewrite= yesnotoi(argv[1])) == -1) {
@@ -688,6 +719,63 @@ void configSetCommand(redisClient *c) {
 
         if (yn == -1) goto badfmt;
         server.aof_rewrite_incremental_fsync = yn;
+#ifdef USE_NVML
+    } else if (!strcasecmp(c->argv[2]->ptr, "aof-use-nvml")){
+        int enable = yesnotoi(o->ptr);
+
+        if (enable == -1) goto badfmt;
+
+        if (server.aof_use_nvml != enable) {
+            if (server.aof_state == REDIS_AOF_OFF) {
+                server.aof_use_nvml = enable;
+            } else if (server.aof_state == REDIS_AOF_ON) {
+                // - change aof-nvml-value
+                // - rewrite aof
+                server.aof_use_nvml = enable;
+                redisLog(REDIS_NOTICE,"Restarting AOF to switch NVML mode");
+                stopAppendOnly();
+                if (startAppendOnly() == REDIS_ERR) {
+                    addReplyError(c,"Unable to turn on AOF. Check server logs.");
+                    return;
+                }
+            } else {
+                // rewrite operation in progress, return error
+                addReplyError(c,
+                    "Unable to change AOF NVML mode, rewrite operation in progress.");
+                return;
+            }
+        }
+    } else if (!strcasecmp(c->argv[2]->ptr, "aof-nvml-direct")){
+        int enable = yesnotoi(o->ptr);
+
+        if (enable == -1) goto badfmt;
+        server.aof_nvml_direct = enable;
+        if (server.aof_use_nvml != REDIS_AOF_OFF
+                && server.aof_use_nvml == 1
+                && server.aof_nvml_direct == 1)
+            flushAppendOnlyFile(0);
+    } else if (!strcasecmp(c->argv[2]->ptr, "aof-nvml-log-size")){
+        // resize allocated nvml log size
+        // 1. if new value is bigger: resize and trigger rewrite
+        // 2. if new value is smaller: respond with error
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        if (ll < (server.aof_current_size + PMEMLOG_MIN_POOL)) {
+            addReplyError(c,
+                "Unable to change AOF NVML log size, value to small.");
+            return;
+        } else {
+            server.aof_nvml_log_size = (unsigned)ll;
+            if (server.aof_state == REDIS_AOF_ON && server.aof_use_nvml == 1) {
+                // - rewrite aof
+                redisLog(REDIS_NOTICE,"Restarting AOF resize log file");
+                stopAppendOnly();
+                if (startAppendOnly() == REDIS_ERR) {
+                    addReplyError(c, "Unable to turn on AOF. Check server logs.");
+                    return;
+                }
+            }
+        }
+#endif
     } else if (!strcasecmp(c->argv[2]->ptr,"aof-load-truncated")) {
         int yn = yesnotoi(o->ptr);
 
@@ -1002,6 +1090,9 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("min-slaves-max-lag",server.repl_min_slaves_max_lag);
     config_get_numerical_field("hz",server.hz);
     config_get_numerical_field("repl-diskless-sync-delay",server.repl_diskless_sync_delay);
+#ifdef USE_NVML
+    config_get_numerical_field("aof-nvml-log-size",server.aof_nvml_log_size);
+#endif
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -1024,6 +1115,12 @@ void configGetCommand(redisClient *c) {
             server.aof_rewrite_incremental_fsync);
     config_get_bool_field("aof-load-truncated",
             server.aof_load_truncated);
+#ifdef USE_NVML
+    config_get_bool_field("aof-use-nvml",
+            server.aof_use_nvml);
+    config_get_bool_field("aof-nvml-direct",
+            server.aof_nvml_direct);
+#endif
 
     /* Everything we can't handle with macros follows. */
 
@@ -1763,6 +1860,11 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"maxmemory-samples",server.maxmemory_samples,REDIS_DEFAULT_MAXMEMORY_SAMPLES);
     rewriteConfigYesNoOption(state,"appendonly",server.aof_state != REDIS_AOF_OFF,0);
     rewriteConfigStringOption(state,"appendfilename",server.aof_filename,REDIS_DEFAULT_AOF_FILENAME);
+#ifdef USE_NVML
+    rewriteConfigYesNoOption(state,"aof-use-nvml",server.aof_use_nvml,REDIS_DEFAULT_AOF_USE_NVML);
+    rewriteConfigYesNoOption(state,"aof-nvml-direct",server.aof_nvml_direct,REDIS_DEFAULT_AOF_NVML_DIRECT);
+    rewriteConfigBytesOption(state,"aof-nvml-log-size",server.aof_nvml_log_size,REDIS_DEFAULT_AOF_NVML_LOG_SIZE);
+#endif
     rewriteConfigEnumOption(state,"appendfsync",server.aof_fsync,
         "everysec", AOF_FSYNC_EVERYSEC,
         "always", AOF_FSYNC_ALWAYS,

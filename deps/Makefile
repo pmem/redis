@@ -37,6 +37,7 @@ distclean:
 	-(cd linenoise && $(MAKE) clean) > /dev/null || true
 	-(cd lua && $(MAKE) clean) > /dev/null || true
 	-(cd jemalloc && [ -f Makefile ] && $(MAKE) distclean) > /dev/null || true
+	-(cd nvml && $(MAKE) distclean) > /dev/null || true
 	-(rm -f .make-*)
 
 .PHONY: distclean
@@ -52,6 +53,12 @@ linenoise: .make-prerequisites
 	cd linenoise && $(MAKE)
 
 .PHONY: linenoise
+
+nvml: .make-prerequisites
+	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
+	cd nvml && $(MAKE)
+
+.PHONY: nvml
 
 ifeq ($(uname_S),SunOS)
 	# Make isinf() available
