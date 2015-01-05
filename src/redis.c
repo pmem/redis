@@ -1355,7 +1355,6 @@ void initServerConfig(void) {
     server.aof_nvml_direct = REDIS_DEFAULT_AOF_NVML_DIRECT;
     server.aof_plp = NULL;
     server.aof_filename_rewr = NULL;
-    server.aof_fd_rewr = -1;
     server.aof_plp_rewr = NULL;
     server.aof_nvml_log_size = REDIS_DEFAULT_AOF_NVML_LOG_SIZE;
     server.aof_trigger_rewrite = 0;

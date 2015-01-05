@@ -723,10 +723,9 @@ struct redisServer {
 #ifdef USE_NVML
     int aof_use_nvml;               /* Use NVML PMEMLOG to write and read AOF log */
     int aof_nvml_direct;            /* Do not use in-memory rewrite buffer */
-    off_t aof_nvml_log_size;        /* Size of PMEMLOG defined in config in bytes */
+    size_t aof_nvml_log_size;       /* Size of PMEMLOG defined in config in bytes */
     PMEMlogpool *aof_plp;           /* Handle to PMEMLOG control object */
     char *aof_filename_rewr;        /* filename of rewrite PMEMLOG pool file */
-    int aof_fd_rewr;                /* File descriptor of rewrite PMEMLOG pool */
     PMEMlogpool *aof_plp_rewr;      /* Handle to PMEMLOG pool used at rewrite */
     int aof_trigger_rewrite;        /* Used when there's needed rewrite after opening AOF */
     off_t aof_nvml_direct_pos;      /* Position in PMEMLOG where rewrite started */
