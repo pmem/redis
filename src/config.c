@@ -1,6 +1,7 @@
 /* Configuration file parsing and CONFIG GET/SET commands implementation.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2015, Intel Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -729,8 +730,8 @@ void configSetCommand(redisClient *c) {
             if (server.aof_state == REDIS_AOF_OFF) {
                 server.aof_use_nvml = enable;
             } else if (server.aof_state == REDIS_AOF_ON) {
-                // - change aof-nvml-value
-                // - rewrite aof
+                // change aof-nvml-value
+                // rewrite aof
                 server.aof_use_nvml = enable;
                 redisLog(REDIS_NOTICE,"Restarting AOF to switch NVML mode");
                 stopAppendOnly();
@@ -766,7 +767,7 @@ void configSetCommand(redisClient *c) {
         } else {
             server.aof_nvml_log_size = (unsigned)ll;
             if (server.aof_state == REDIS_AOF_ON && server.aof_use_nvml == 1) {
-                // - rewrite aof
+                // rewrite aof
                 redisLog(REDIS_NOTICE,"Restarting AOF resize log file");
                 stopAppendOnly();
                 if (startAppendOnly() == REDIS_ERR) {

@@ -1,5 +1,6 @@
 # Redis Makefile
 # Copyright (C) 2009 Salvatore Sanfilippo <antirez at gmail dot com>
+# Copyright (c) 2015, Intel Corporation
 # This file is released under the BSD license, see the COPYING file
 #
 # The Makefile composes the final FINAL_CFLAGS and FINAL_LDFLAGS using
@@ -97,7 +98,11 @@ endif
 ifeq ($(USE_NVML),yes)
 	DEPENDENCY_TARGETS+= nvml
 	FINAL_CFLAGS+= -I../deps/nvml/src/include -DUSE_NVML
-	FINAL_LIBS+= ../deps/nvml/src/nondebug/libpmem.a ../deps/nvml/src/nondebug/libpmemlog.a ../deps/nvml/src/nondebug/libpmem.a -luuid
+ifeq ($(NVML_DEBUG),yes)
+	NVML_LIBS= ../deps/nvml/src/debug/libpmemlog.a ../deps/nvml/src/debug/libpmem.a -luuid
+else
+	NVML_LIBS= ../deps/nvml/src/nondebug/libpmemlog.a ../deps/nvml/src/nondebug/libpmem.a -luuid
+endif
 endif
 
 
@@ -175,7 +180,7 @@ endif
 
 # redis-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(FINAL_LIBS)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(NVML_LIBS) $(FINAL_LIBS)
 
 # redis-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
@@ -243,7 +248,7 @@ gcov:
 	$(MAKE) REDIS_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" REDIS_LDFLAGS="-fprofile-arcs -ftest-coverage"
 
 noopt:
-	$(MAKE) OPTIMIZATION="-O0"
+	$(MAKE) OPTIMIZATION="-O0" NVML_DEBUG=yes
 
 valgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc"

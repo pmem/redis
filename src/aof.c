@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2015, Intel Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -155,7 +156,6 @@ ssize_t aofRewriteBufferWritePMEMlog(PMEMlogpool* plp) {
     listNode *ln;
     listIter li;
     ssize_t count = 0;
-    int appended_bytes;
 
     listRewind(server.aof_rewrite_buf_blocks,&li);
     while((ln = listNext(&li))) {
@@ -163,8 +163,7 @@ ssize_t aofRewriteBufferWritePMEMlog(PMEMlogpool* plp) {
 
         if (block->used) {
 
-            appended_bytes = pmemlog_append(plp, block->buf, block->used);
-            if (appended_bytes == -1) {
+            if (pmemlog_append(plp, block->buf, block->used) == -1) {
                 redisLog(REDIS_ERR, "Error appending AOF NVML diff: %s", strerror(errno));
                 return -1;
             }
@@ -191,28 +190,34 @@ void aof_background_fsync(int fd) {
  * will be available at launch, when rewrite will be triggered, then rewr pool
  * will be populated with fresh data, buffer will be appended and pointers of
  * pools will be exchanged */
-int openAppendOnlyFileREWR(void) {
-    size_t rewr_len;
-    struct redis_stat sb;
-    /* server.aof_filename + '_rewr' + '\0' */
-    rewr_len = strlen(server.aof_filename) + 6;
-    server.aof_filename_rewr = (char*) zmalloc(rewr_len * sizeof(char));
-    snprintf(server.aof_filename_rewr, rewr_len, "%s_rewr", server.aof_filename);
 
-    if (redis_stat(server.aof_filename_rewr,&sb) != -1) {
-        if ((server.aof_plp_rewr = pmemlog_open(server.aof_filename_rewr)) == NULL) {
+char* genAppendOnlyFilenameREWR(void) {
+    /* server.aof_filename + '_rewr' + '\0' */
+    size_t rewr_len = strlen(server.aof_filename) + 6;
+    char *aof_filename_rewr = (char*) zmalloc(rewr_len * sizeof(char));
+    snprintf(aof_filename_rewr, rewr_len, "%s_rewr", server.aof_filename);
+
+    return aof_filename_rewr;
+}
+
+int openAppendOnlyFileREWR(void) {
+    struct redis_stat sb;
+    char *aof_filename_rewr = genAppendOnlyFilenameREWR();
+
+    if (redis_stat(aof_filename_rewr,&sb) != -1) {
+        if ((server.aof_plp_rewr = pmemlog_open(aof_filename_rewr)) == NULL) {
             redisLog(REDIS_WARNING, "Redis cannot open NVML AOF REWR file: %s", strerror(errno));
             exit(1);
         }
+        pmemlog_rewind(server.aof_plp_rewr);
     } else {
-        if ((server.aof_plp_rewr = pmemlog_create(server.aof_filename_rewr, server.aof_nvml_log_size, 0600)) == NULL) {
+        if ((server.aof_plp_rewr = pmemlog_create(aof_filename_rewr, server.aof_nvml_log_size, 0600)) == NULL) {
             redisLog(REDIS_WARNING, "Redis cannot create NVML AOF REWR file: %s", strerror(errno));
             return REDIS_ERR;
         }
     }
 
-    pmemlog_rewind(server.aof_plp_rewr);
-
+    zfree(aof_filename_rewr);
     return REDIS_OK;
 }
 #endif
@@ -229,18 +234,17 @@ void openAppendOnlyFile(void)
          * trigger rewrite */
 
         int stat_ret;
-        struct stat *stat_buf;
+        struct stat stat_buf;
 
         /* if file doesn't exist create it and truncate to configured size */
-        stat_buf = zmalloc(sizeof (struct stat));
-        stat_ret = stat(server.aof_filename, stat_buf);
+        stat_ret = stat(server.aof_filename, &stat_buf);
         if (stat_ret != 0) {
             if (errno != ENOENT) {
                 redisLog(REDIS_WARNING, "Can't stat the AOF file: %s",
                          strerror(errno));
                 exit(1);
             } else {
-                /* file don't exist: create it */
+                /* file doesn't exist: create it */
                 if ((server.aof_plp = pmemlog_create(server.aof_filename, server.aof_nvml_log_size, 0600)) == NULL) {
                     redisLog(REDIS_WARNING, "Redis cannot create NVML AOF file: %s", strerror(errno));
                     exit(1);
@@ -253,7 +257,6 @@ void openAppendOnlyFile(void)
                 exit(1);
             }
         }
-        zfree(stat_buf);
 
         /* For redis non-negaitve aof_fd indicates, that openning aof file
          * succeeded. PMEMlog handles fd internally, so here aof_fd is set to
@@ -287,8 +290,7 @@ void closeAppendOnlyFileREWR(void) {
 int closeAppendOnlyFile(void)
 {
 #ifdef USE_NVML
-    if (server.aof_use_nvml == 1
-            && server.aof_plp != NULL) {
+    if (server.aof_plp != NULL) {
         pmemlog_close(server.aof_plp);
         server.aof_plp = NULL;
 
@@ -420,35 +422,10 @@ void flushAppendOnlyFile(int force) {
 #ifdef USE_NVML
     if (server.aof_use_nvml == 1) {
         size_t len = sdslen(server.aof_buf);
-        size_t newlen = server.aof_current_size + len;
 
-        /* Check if there's required space, if not try to rewrite first */
-        if (newlen > server.aof_nvml_log_size)
-        {
-            /* if there's not enough space try to compact AOF file */
-            redisLog(REDIS_ERR, "Not enough space to write AOF file");
-            redisLog(REDIS_NOTICE, "Starting background rewrite of AOF file");
-            if (rewriteAppendOnlyFileBackground() != REDIS_OK) {
-                redisLog(REDIS_ERR, "Starting background rewrite of AOF file failed!");
-            }
-            nwritten = -1;
-            errno = ENOSPC;
-        } else {
-            if (!pmemlog_append(server.aof_plp, server.aof_buf, len)) {
-                nwritten = len;
-
-                /* if reached threshold for AOF rewrite it */
-                if (server.aof_rewrite_perc > 0 &&
-                        server.aof_current_size > (server.aof_nvml_log_size *
-                                               server.aof_rewrite_perc / 100)) {
-                    redisLog(REDIS_NOTICE, "Starting background rewrite of AOF file");
-                    if (rewriteAppendOnlyFileBackground() != REDIS_OK) {
-                        redisLog(REDIS_ERR, "Starting background rewrite of AOF file failed!");
-                    }
-                }
-            } else {
-                nwritten = -1;
-            }
+        nwritten = pmemlog_append(server.aof_plp, server.aof_buf, len);
+        if (nwritten != -1) {
+            nwritten = len;
         }
     } else {
 #endif
@@ -516,6 +493,14 @@ void flushAppendOnlyFile(int force) {
         }
 
         /* Handle the AOF write error. */
+
+        /* For NVML behavior is similar to AOF_FSYNC_ALWAYS */
+#ifdef USE_NVML
+        if (server.aof_use_nvml == 1) {
+            redisLog(REDIS_WARNING,"Can't recover from AOF write error when the AOF NVML is enabled. Exiting...");
+            exit(1);
+        }
+#endif
         if (server.aof_fsync == AOF_FSYNC_ALWAYS) {
             /* We can't recover when the fsync policy is ALWAYS since the
              * reply for the client is already in the output buffers, and we
@@ -688,29 +673,16 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
     {
 #ifdef USE_NVML
         if (server.aof_use_nvml == 1 && server.aof_nvml_direct == 1) {
-            size_t len = sdslen(buf);
-            size_t newlen = server.aof_current_size + len;
-
-            /* Check if there's required space, if not try to rewrite first */
-            if (newlen > server.aof_nvml_log_size)
-            {
-                /* if there's not enough space try to compact AOF file */
-                redisLog(REDIS_ERR, "Not enough space to write AOF file");
-                redisLog(REDIS_NOTICE, "Starting background rewrite of AOF file");
-                if (rewriteAppendOnlyFileBackground() != REDIS_OK) {
-                    redisLog(REDIS_ERR, "Starting background rewrite of AOF file failed!");
-                }
-                errno = ENOSPC;
+            /* When NVML direct mode is on we directly write to the log, skipping
+             * aof_buf. */
+            if (!pmemlog_append(server.aof_plp, buf, sdslen(buf))) {
+                server.aof_current_size += sdslen(buf);
             } else {
-                if (!pmemlog_append(server.aof_plp, buf, len)) {
-                    server.aof_current_size += len;
-                } else {
-                    redisLog(REDIS_WARNING,"Error writing to the AOF file: %s",
-                        strerror(errno));
-
-                    /* fallback to buffer when write failed */
-                    server.aof_buf = sdscatlen(server.aof_buf,buf,sdslen(buf));
-                }
+                /* Similar to case in flushAppendOnlyFile for APPEND_FSYNC_ALWAYS
+                 * if write failed redis is shutdown. */
+                redisLog(REDIS_WARNING,"Error writing to the AOF file: %s",
+                    strerror(errno));
+                exit(1);
             }
         } else {
 #endif
@@ -950,7 +922,6 @@ int loadBufferPMEMlog(const void *buf, size_t buflen, void *arg) {
 
     while (bufchar < endptr) {
         int argc, j;
-        //size_t buflen;
         unsigned long len;
         robj **argv;
         sds argsds;
@@ -1483,12 +1454,8 @@ int rewriteAppendOnlyFileBackground(void) {
     start = ustime();
 #ifdef USE_NVML
     if (server.aof_use_nvml == 1) {
-        if (server.aof_state == REDIS_AOF_OFF && server.aof_fd == -1) {
+        if (server.aof_state == REDIS_AOF_OFF && server.aof_plp == NULL) {
             openAppendOnlyFile();
-        }
-
-        if (server.aof_nvml_direct == 1) {
-            server.aof_nvml_direct_pos = pmemlog_tell(server.aof_plp);
         }
     }
 #endif
@@ -1587,10 +1554,10 @@ void aofUpdateCurrentSize(void) {
 #ifdef USE_NVML
 /* Copy difference between PMEMLOG pools */
 int copyDiffPMEMlog(const void *buf, size_t end, void *arg) {
-    buf = buf + server.aof_nvml_direct_pos;
-    if (pmemlog_append(server.aof_plp_rewr, buf, pmemlog_tell(server.aof_plp) - server.aof_nvml_direct_pos) == -1) {
+    buf = buf + server.aof_rewrite_base_size;
+    if (pmemlog_append(server.aof_plp_rewr, buf, pmemlog_tell(server.aof_plp) - server.aof_rewrite_base_size) == -1) {
         redisLog(REDIS_WARNING, "I/O error at applying diff to rewriten AOF: %s, from: %zu to: %zu",
-                strerror(errno), server.aof_nvml_direct_pos, end);
+            strerror(errno), server.aof_rewrite_base_size, end);
         return 1;
     }
 
@@ -1634,20 +1601,21 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             redisLog(REDIS_NOTICE,
                 "Parent diff successfully flushed to the rewritten AOF (%lu bytes)", aofRewriteBufferSize());
 
-            /* swap filenames, swap fd's  and plp's */
+            /* swap filenames and plps */
             latencyStartMonitor(latency);
+            char *aof_filename_rewr = genAppendOnlyFilenameREWR();
             snprintf(tmpfile, 256, "aof-rewrite-swap-%d.aof", getpid());
             if (rename (server.aof_filename, tmpfile) == -1) {
                 redisLog(REDIS_WARNING, "Redis cannot rename AOF to temporary file: %s",
                         strerror(errno));
                 goto cleanup;
             }
-            if (rename(server.aof_filename_rewr, server.aof_filename) == -1) {
+            if (rename(aof_filename_rewr, server.aof_filename) == -1) {
                 redisLog(REDIS_WARNING, "Redis cannot rename AOF rewrite file to AOF: %s",
                         strerror(errno));
                 goto cleanup;
             }
-            if (rename(tmpfile, server.aof_filename_rewr) == -1) {
+            if (rename(tmpfile, aof_filename_rewr) == -1) {
                 redisLog(REDIS_WARNING, "Redis cannot rename temporary file to AOF rewrite: %s",
                         strerror(errno));
                 goto cleanup;
@@ -1663,16 +1631,18 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
                 /* compute real size of rewrite file, if it's different, than configured
                  * the reopen file */
-                if ((pmemlog_tell(server.aof_plp) + pmemlog_nbyte(server.aof_plp)) !=
-                            (pmemlog_tell(server.aof_plp_rewr) + pmemlog_nbyte(server.aof_plp_rewr))) {
+                if (pmemlog_nbyte(server.aof_plp) != pmemlog_nbyte(server.aof_plp_rewr)) {
                     /* when file will be reopened then will be truncated to the new
                      * size */
                     closeAppendOnlyFileREWR();
+                    unlink(aof_filename_rewr);
                     openAppendOnlyFileREWR();
                 } else {
                     /* rewind rewrite pool */
                     pmemlog_rewind(server.aof_plp_rewr);
                 }
+
+                zfree(aof_filename_rewr);
                 server.aof_selected_db = -1; /* Make sure SELECT is re-issued */
                 aofUpdateCurrentSize();
                 server.aof_rewrite_base_size = server.aof_current_size;
@@ -1702,8 +1672,8 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("aof-rewrite-diff-write",latency);
 
-                  redisLog(REDIS_NOTICE,
-                                "Parent diff successfully flushed to the rewritten AOF (%lu bytes)", aofRewriteBufferSize());
+            redisLog(REDIS_NOTICE,
+                        "Parent diff successfully flushed to the rewritten AOF (%lu bytes)", aofRewriteBufferSize());
 
             /* The only remaining thing to do is to rename the temporary file to
              * the configured file and switch the file descriptor used to do AOF
@@ -1738,7 +1708,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
                 /* Don't care if this fails: oldfd will be -1 and we handle that.
                  * One notable case of -1 return is if the old file does
                  * not exist. */
-                 oldfd = open(server.aof_filename,O_RDONLY|O_NONBLOCK);
+                oldfd = open(server.aof_filename,O_RDONLY|O_NONBLOCK);
             } else {
                 /* AOF enabled */
                 oldfd = -1; /* We'll set this to the current AOF filedes later. */
@@ -1777,8 +1747,8 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
                 /* Clear regular AOF buffer since its contents was just written to
                  * the new AOF from the background rewrite buffer. */
-                 sdsfree(server.aof_buf);
-                 server.aof_buf = sdsempty();
+                sdsfree(server.aof_buf);
+                server.aof_buf = sdsempty();
             }
 #ifdef USE_NVML
         }

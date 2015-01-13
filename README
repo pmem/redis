@@ -58,6 +58,23 @@ To compile against jemalloc on Mac OS X systems, use:
 
     % make MALLOC=jemalloc
 
+NVML
+----
+
+It is possible to compile Redis with experimental support for NVML, adding
+option to configure AOF mode to save journal to the NVML pool. NVML mode is 
+slower than conventional plan-text file on conventional hard drives, but is 
+optimized for persistent memory (for more information check http://pmem.io).
+All related configuration options are described in `redis.conf`.
+
+To build Redis with NVML support first you need initialize NVML repository:
+
+    % git submodule update --init
+
+Then build Redis with flag:
+
+    % make USE_NVML=yes
+
 Verbose build
 -------------
 

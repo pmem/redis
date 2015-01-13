@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2009-2012, Pieter Noordhuis <pcnoordhuis at gmail dot com>
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2015, Intel Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +28,6 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #ifndef __REDIS_RIO_H
 #define __REDIS_RIO_H

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2015, Intel Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -725,10 +726,8 @@ struct redisServer {
     int aof_nvml_direct;            /* Do not use in-memory rewrite buffer */
     size_t aof_nvml_log_size;       /* Size of PMEMLOG defined in config in bytes */
     PMEMlogpool *aof_plp;           /* Handle to PMEMLOG control object */
-    char *aof_filename_rewr;        /* filename of rewrite PMEMLOG pool file */
     PMEMlogpool *aof_plp_rewr;      /* Handle to PMEMLOG pool used at rewrite */
     int aof_trigger_rewrite;        /* Used when there's needed rewrite after opening AOF */
-    off_t aof_nvml_direct_pos;      /* Position in PMEMLOG where rewrite started */
 #endif
     /* RDB persistence */
     long long dirty;                /* Changes to DB from the last save */
