@@ -33,10 +33,10 @@
  * Pubsub low level API
  *----------------------------------------------------------------------------*/
 
-void freePubsubPattern(void *p) {
+void freePubsubPattern(void *p, PM_TRANS trans) {
     pubsubPattern *pat = p;
 
-    decrRefCount(pat->pattern);
+    decrRefCount(pat->pattern, trans);
     zfree(pat);
 }
 
@@ -61,19 +61,19 @@ int pubsubSubscribeChannel(redisClient *c, robj *channel) {
     int retval = 0;
 
     /* Add the channel to the client -> channels hash table */
-    if (dictAdd(c->pubsub_channels,channel,NULL) == DICT_OK) {
+    if (dictAdd(c->pubsub_channels,channel,NULL,PM_TRANS_RAM) == DICT_OK) {
         retval = 1;
-        incrRefCount(channel);
+        incrRefCount(channel,PM_TRANS_RAM);
         /* Add the client to the channel -> list of clients hash table */
         de = dictFind(server.pubsub_channels,channel);
         if (de == NULL) {
-            clients = listCreate();
-            dictAdd(server.pubsub_channels,channel,clients);
-            incrRefCount(channel);
+            clients = listCreate(PM_TRANS_RAM);
+            dictAdd(server.pubsub_channels,channel,clients,PM_TRANS_RAM);
+            incrRefCount(channel,PM_TRANS_RAM);
         } else {
             clients = dictGetVal(de);
         }
-        listAddNodeTail(clients,c);
+        listAddNodeTail(clients,c,PM_TRANS_RAM);
     }
     /* Notify the client */
     addReply(c,shared.mbulkhdr[3]);
@@ -92,7 +92,7 @@ int pubsubUnsubscribeChannel(redisClient *c, robj *channel, int notify) {
     int retval = 0;
 
     /* Remove the channel from the client -> channels hash table */
-    incrRefCount(channel); /* channel may be just a pointer to the same object
+    incrRefCount(channel,PM_TRANS_RAM); /* channel may be just a pointer to the same object
                             we have in the hash tables. Protect it... */
     if (dictDelete(c->pubsub_channels,channel) == DICT_OK) {
         retval = 1;
@@ -102,7 +102,7 @@ int pubsubUnsubscribeChannel(redisClient *c, robj *channel, int notify) {
         clients = dictGetVal(de);
         ln = listSearchKey(clients,c);
         redisAssertWithInfo(c,NULL,ln != NULL);
-        listDelNode(clients,ln);
+        listDelNode(clients,ln,PM_TRANS_RAM);
         if (listLength(clients) == 0) {
             /* Free the list and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
@@ -119,7 +119,7 @@ int pubsubUnsubscribeChannel(redisClient *c, robj *channel, int notify) {
                        listLength(c->pubsub_patterns));
 
     }
-    decrRefCount(channel); /* it is finally safe to release it */
+    decrRefCount(channel,PM_TRANS_RAM); /* it is finally safe to release it */
     return retval;
 }
 
@@ -130,12 +130,12 @@ int pubsubSubscribePattern(redisClient *c, robj *pattern) {
     if (listSearchKey(c->pubsub_patterns,pattern) == NULL) {
         retval = 1;
         pubsubPattern *pat;
-        listAddNodeTail(c->pubsub_patterns,pattern);
-        incrRefCount(pattern);
+        listAddNodeTail(c->pubsub_patterns,pattern,PM_TRANS_RAM);
+        incrRefCount(pattern,PM_TRANS_RAM);
         pat = zmalloc(sizeof(*pat));
-        pat->pattern = getDecodedObject(pattern);
+        pat->pattern = getDecodedObject(pattern,PM_TRANS_RAM);
         pat->client = c;
-        listAddNodeTail(server.pubsub_patterns,pat);
+        listAddNodeTail(server.pubsub_patterns,pat,PM_TRANS_RAM);
     }
     /* Notify the client */
     addReply(c,shared.mbulkhdr[3]);
@@ -152,14 +152,14 @@ int pubsubUnsubscribePattern(redisClient *c, robj *pattern, int notify) {
     pubsubPattern pat;
     int retval = 0;
 
-    incrRefCount(pattern); /* Protect the object. May be the same we remove */
+    incrRefCount(pattern,PM_TRANS_RAM); /* Protect the object. May be the same we remove */
     if ((ln = listSearchKey(c->pubsub_patterns,pattern)) != NULL) {
         retval = 1;
-        listDelNode(c->pubsub_patterns,ln);
+        listDelNode(c->pubsub_patterns,ln,PM_TRANS_RAM);
         pat.client = c;
         pat.pattern = pattern;
         ln = listSearchKey(server.pubsub_patterns,&pat);
-        listDelNode(server.pubsub_patterns,ln);
+        listDelNode(server.pubsub_patterns,ln,PM_TRANS_RAM);
     }
     /* Notify the client */
     if (notify) {
@@ -169,7 +169,7 @@ int pubsubUnsubscribePattern(redisClient *c, robj *pattern, int notify) {
         addReplyLongLong(c,dictSize(c->pubsub_channels)+
                        listLength(c->pubsub_patterns));
     }
-    decrRefCount(pattern);
+    decrRefCount(pattern,PM_TRANS_RAM);
     return retval;
 }
 
@@ -249,7 +249,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
     /* Send to clients listening to matching channels */
     if (listLength(server.pubsub_patterns)) {
         listRewind(server.pubsub_patterns,&li);
-        channel = getDecodedObject(channel);
+        channel = getDecodedObject(channel,PM_TRANS_RAM);
         while ((ln = listNext(&li)) != NULL) {
             pubsubPattern *pat = ln->value;
 
@@ -265,7 +265,7 @@ int pubsubPublishMessage(robj *channel, robj *message) {
                 receivers++;
             }
         }
-        decrRefCount(channel);
+        decrRefCount(channel,PM_TRANS_RAM);
     }
     return receivers;
 }

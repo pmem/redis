@@ -30,6 +30,7 @@
 
 #ifndef __ZMALLOC_H
 #define __ZMALLOC_H
+#include "pm.h"
 
 /* Double expansion needed for stringification of macro values. */
 #define __xstr(s) __str(s)
@@ -69,6 +70,7 @@ void *zmalloc(size_t size);
 void *zcalloc(size_t size);
 void *zrealloc(void *ptr, size_t size);
 void zfree(void *ptr);
+void zfree_trans(void *ptr, PM_TRANS trans);
 char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);
 void zmalloc_enable_thread_safeness(void);

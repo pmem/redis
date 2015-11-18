@@ -46,6 +46,8 @@
 #include "dict.h"
 #include "zmalloc.h"
 #include "redisassert.h"
+#include "pm.h"
+#include "sds.h"
 
 /* Using dictEnableResize() / dictDisableResize() we make possible to
  * enable/disable resizing of the hash table as needed. This is very important
@@ -305,12 +307,13 @@ static void _dictRehashStep(dict *d) {
 }
 
 /* Add an element to the target hash table */
-int dictAdd(dict *d, void *key, void *val)
+int dictAdd(dict *d, void *key, void *val, PM_TRANS trans)
 {
-    dictEntry *entry = dictAddRaw(d,key);
+    dictEntry *entry = dictAddRaw(d,key,trans);
 
     if (!entry) return DICT_ERR;
-    dictSetVal(d, entry, val);
+
+    dictSetVal(d, entry, val, trans);
     return DICT_OK;
 }
 
@@ -329,7 +332,7 @@ int dictAdd(dict *d, void *key, void *val)
  * If key already exists NULL is returned.
  * If key was added, the hash entry is returned to be manipulated by the caller.
  */
-dictEntry *dictAddRaw(dict *d, void *key)
+dictEntry *dictAddRaw(dict *d, void *key, PM_TRANS trans)
 {
     int index;
     dictEntry *entry;
@@ -344,27 +347,68 @@ dictEntry *dictAddRaw(dict *d, void *key)
 
     /* Allocate the memory and store the new entry */
     ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
-    entry = zmalloc(sizeof(*entry));
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        size_t key_len = sdslen(key);
+        carg c = {0};
+        c.ptr = key;
+        c.len = key_len;
+        c.dict = d;
+        size_t size = sizeof(*entry) + sdsnewlen_alloc_size(key_len);
+        entry = pm_trans_alloc(trans, size, PM_TAG_ALLOC_ENTITY,&c);
+        pmemobj_persist(trans,entry, size);
+        //pmem_persist_pool(entry, size, 0);
+    }
+    else
+    {
+        entry = zmalloc(sizeof(*entry));
+        /* Set the hash entry fields. */
+        dictSetKey(d, entry, key);
+    }
+
+    /* It is not required to persist &(entry->next), because entry->next will be set again after rebuild hash */
+    entry->next = ht->table[index];
+    ht->table[index] = entry;
+    ht->used++;
+
+    return entry;
+}
+
+void dictAddDictEntry(dict *d, dictEntry *entry)
+{
+    int index;
+    dictht *ht;
+
+    if (dictIsRehashing(d)) _dictRehashStep(d);
+
+    /* Get the index of the new element, or -1 if
+     * the element already exists. */
+    if ((index = _dictKeyIndex(d, entry->key)) == -1)
+        return;
+
+    /* Allocate the memory and store the new entry */
+    ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
+
     entry->next = ht->table[index];
     ht->table[index] = entry;
     ht->used++;
 
     /* Set the hash entry fields. */
-    dictSetKey(d, entry, key);
-    return entry;
+    dictSetKey(d, entry, entry->key);
 }
 
 /* Add an element, discarding the old if the key already exists.
  * Return 1 if the key was added from scratch, 0 if there was already an
  * element with such key and dictReplace() just performed a value update
  * operation. */
-int dictReplace(dict *d, void *key, void *val)
+int dictReplace(dict *d, void *key, void *val, PM_TRANS trans)
 {
     dictEntry *entry, auxentry;
 
     /* Try to add the element. If the key
      * does not exists dictAdd will suceed. */
-    if (dictAdd(d, key, val) == DICT_OK)
+    if (dictAdd(d, key, val, trans) == DICT_OK)
         return 1;
     /* It already exists, get the entry */
     entry = dictFind(d, key);
@@ -374,10 +418,17 @@ int dictReplace(dict *d, void *key, void *val)
      * you want to increment (set), and then decrement (free), and not the
      * reverse. */
     auxentry = *entry;
-    dictSetVal(d, entry, val);
-    dictFreeVal(d, &auxentry);
+    /*decrement ref counter of old value*/
+    if(PM_TRANS_RAM!=trans){
+	decrRefCountWithoutRemoval(entry->v.val, trans);
+    }
+    /*set entry pointer to new value*/
+    dictSetVal(d, entry, val, trans);
+    /*remove old value*/
+    dictFreeVal(d, &auxentry, trans);
     return 0;
 }
+
 
 /* dictReplaceRaw() is simply a version of dictAddRaw() that always
  * returns the hash entry of the specified key, even if the key already
@@ -385,10 +436,10 @@ int dictReplace(dict *d, void *key, void *val)
  * existing key is returned.)
  *
  * See dictAddRaw() for more information. */
-dictEntry *dictReplaceRaw(dict *d, void *key) {
+dictEntry *dictReplaceRaw(dict *d, void *key, PM_TRANS trans) {
     dictEntry *entry = dictFind(d,key);
 
-    return entry ? entry : dictAddRaw(d,key);
+    return entry ? entry : dictAddRaw(d,key,trans);
 }
 
 /* Search and remove an element */
@@ -406,18 +457,42 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
         idx = h & d->ht[table].sizemask;
         he = d->ht[table].table[idx];
         prevHe = NULL;
+
         while(he) {
             if (dictCompareKeys(d, key, he->key)) {
-                /* Unlink the element from the list */
-                if (prevHe)
-                    prevHe->next = he->next;
-                else
-                    d->ht[table].table[idx] = he->next;
-                if (!nofree) {
-                    dictFreeKey(d, he);
-                    dictFreeVal(d, he);
-                }
-                zfree(he);
+                 if(d->type->persistent)
+                 {
+                    PM_TRANS trans = pm_pool;
+                    /* Unlink the element from the list */
+                    if (prevHe)
+                    {
+                        prevHe->next = he->next; /* Do not need to be persist, because ->next rebuild when load */
+                    }
+                    else
+                    {
+                        d->ht[table].table[idx] = he->next;
+                    }
+                    pm_trans_free(trans, he);
+                    if (!nofree) {
+                        dictFreeKey(d, he, trans);
+                        dictFreeVal(d, he, trans);
+                    }
+
+                 }
+                 else
+                 {
+                    /* Unlink the element from the list */
+                    if (prevHe)
+                        prevHe->next = he->next;
+                    else
+                        d->ht[table].table[idx] = he->next;
+                    if (!nofree) {
+                        dictFreeKey(d, he, PM_TRANS_RAM);
+                        dictFreeVal(d, he, PM_TRANS_RAM);
+                    }
+                    zfree(he);
+                 }
+
                 d->ht[table].used--;
                 return DICT_OK;
             }
@@ -450,9 +525,20 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         if ((he = ht->table[i]) == NULL) continue;
         while(he) {
             nextHe = he->next;
-            dictFreeKey(d, he);
-            dictFreeVal(d, he);
-            zfree(he);
+            if(d->type->persistent)
+            {
+                PM_TRANS trans = pm_pool;
+                dictFreeKey(d, he, trans);
+                dictFreeVal(d, he, trans);
+                pm_trans_free(trans, he);
+                pm_trans_end(trans);
+            }
+            else
+            {
+                dictFreeKey(d, he, PM_TRANS_RAM);
+                dictFreeVal(d, he, PM_TRANS_RAM);
+                zfree(he);
+            }
             ht->used--;
             he = nextHe;
         }

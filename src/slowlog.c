@@ -58,23 +58,23 @@ slowlogEntry *slowlogCreateEntry(robj **argv, int argc, long long duration) {
          * how many remaining arguments there were in the original command. */
         if (slargc != argc && j == slargc-1) {
             se->argv[j] = createObject(REDIS_STRING,
-                sdscatprintf(sdsempty(),"... (%d more arguments)",
-                argc-slargc+1));
+                sdscatprintf(sdsempty(PM_TRANS_RAM),"... (%d more arguments)",
+                argc-slargc+1),PM_TRANS_RAM);
         } else {
             /* Trim too long strings as well... */
             if (argv[j]->type == REDIS_STRING &&
                 argv[j]->encoding == REDIS_ENCODING_RAW &&
                 sdslen(argv[j]->ptr) > SLOWLOG_ENTRY_MAX_STRING)
             {
-                sds s = sdsnewlen(argv[j]->ptr, SLOWLOG_ENTRY_MAX_STRING);
+                sds s = sdsnewlen(argv[j]->ptr, SLOWLOG_ENTRY_MAX_STRING,PM_TRANS_RAM);
 
                 s = sdscatprintf(s,"... (%lu more bytes)",
                     (unsigned long)
                     sdslen(argv[j]->ptr) - SLOWLOG_ENTRY_MAX_STRING);
-                se->argv[j] = createObject(REDIS_STRING,s);
+                se->argv[j] = createObject(REDIS_STRING,s,PM_TRANS_RAM);
             } else {
                 se->argv[j] = argv[j];
-                incrRefCount(argv[j]);
+                incrRefCount(argv[j],PM_TRANS_RAM);
             }
         }
     }
@@ -88,12 +88,12 @@ slowlogEntry *slowlogCreateEntry(robj **argv, int argc, long long duration) {
  * function matches the one of the 'free' method of adlist.c.
  *
  * This function will take care to release all the retained object. */
-void slowlogFreeEntry(void *septr) {
+void slowlogFreeEntry(void *septr, PM_TRANS trans) {
     slowlogEntry *se = septr;
     int j;
 
     for (j = 0; j < se->argc; j++)
-        decrRefCount(se->argv[j]);
+        decrRefCount(se->argv[j],PM_TRANS_RAM);
     zfree(se->argv);
     zfree(se);
 }
@@ -101,7 +101,7 @@ void slowlogFreeEntry(void *septr) {
 /* Initialize the slow log. This function should be called a single time
  * at server startup. */
 void slowlogInit(void) {
-    server.slowlog = listCreate();
+    server.slowlog = listCreate(PM_TRANS_RAM);
     server.slowlog_entry_id = 0;
     listSetFreeMethod(server.slowlog,slowlogFreeEntry);
 }
@@ -112,17 +112,17 @@ void slowlogInit(void) {
 void slowlogPushEntryIfNeeded(robj **argv, int argc, long long duration) {
     if (server.slowlog_log_slower_than < 0) return; /* Slowlog disabled */
     if (duration >= server.slowlog_log_slower_than)
-        listAddNodeHead(server.slowlog,slowlogCreateEntry(argv,argc,duration));
+        listAddNodeHead(server.slowlog,slowlogCreateEntry(argv,argc,duration),PM_TRANS_RAM);
 
     /* Remove old entries if needed. */
     while (listLength(server.slowlog) > server.slowlog_max_len)
-        listDelNode(server.slowlog,listLast(server.slowlog));
+        listDelNode(server.slowlog,listLast(server.slowlog),PM_TRANS_RAM);
 }
 
 /* Remove all the entries from the current slow log. */
 void slowlogReset(void) {
     while (listLength(server.slowlog) > 0)
-        listDelNode(server.slowlog,listLast(server.slowlog));
+        listDelNode(server.slowlog,listLast(server.slowlog),PM_TRANS_RAM);
 }
 
 /* The SLOWLOG command. Implements all the subcommands needed to handle the

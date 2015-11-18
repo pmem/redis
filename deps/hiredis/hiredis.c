@@ -193,7 +193,7 @@ static void __redisReaderSetError(redisReader *r, int type, const char *str) {
 
     /* Clear input buffer on errors. */
     if (r->buf != NULL) {
-        sdsfree(r->buf);
+        sdsfree(r->buf,PM_TRANS_RAM);
         r->buf = NULL;
         r->pos = r->len = 0;
     }
@@ -563,7 +563,7 @@ redisReader *redisReaderCreate(void) {
     r->err = 0;
     r->errstr[0] = '\0';
     r->fn = &defaultFunctions;
-    r->buf = sdsempty();
+    r->buf = sdsempty(PM_TRANS_RAM);
     r->maxbuf = REDIS_READER_MAX_BUF;
     if (r->buf == NULL) {
         free(r);
@@ -578,7 +578,7 @@ void redisReaderFree(redisReader *r) {
     if (r->reply != NULL && r->fn && r->fn->freeObject)
         r->fn->freeObject(r->reply);
     if (r->buf != NULL)
-        sdsfree(r->buf);
+        sdsfree(r->buf,PM_TRANS_RAM);
     free(r);
 }
 
@@ -593,8 +593,8 @@ int redisReaderFeed(redisReader *r, const char *buf, size_t len) {
     if (buf != NULL && len >= 1) {
         /* Destroy internal buffer when it is empty and is quite large. */
         if (r->len == 0 && r->maxbuf != 0 && sdsavail(r->buf) > r->maxbuf) {
-            sdsfree(r->buf);
-            r->buf = sdsempty();
+            sdsfree(r->buf,PM_TRANS_RAM);
+            r->buf = sdsempty(PM_TRANS_RAM);
             r->pos = 0;
 
             /* r->buf should not be NULL since we just free'd a larger one. */
@@ -699,7 +699,7 @@ int redisvFormatCommand(char **target, const char *format, va_list ap) {
         return -1;
 
     /* Build the command string accordingly to protocol */
-    curarg = sdsempty();
+    curarg = sdsempty(PM_TRANS_RAM);
     if (curarg == NULL)
         return -1;
 
@@ -714,7 +714,7 @@ int redisvFormatCommand(char **target, const char *format, va_list ap) {
                     totlen += bulklen(sdslen(curarg));
 
                     /* curarg is put in argv so it can be overwritten. */
-                    curarg = sdsempty();
+                    curarg = sdsempty(PM_TRANS_RAM);
                     if (curarg == NULL) goto err;
                     touched = 0;
                 }
@@ -865,7 +865,7 @@ int redisvFormatCommand(char **target, const char *format, va_list ap) {
         curargv[argc++] = curarg;
         totlen += bulklen(sdslen(curarg));
     } else {
-        sdsfree(curarg);
+        sdsfree(curarg,PM_TRANS_RAM);
     }
 
     /* Clear curarg because it was put in curargv or was free'd. */
@@ -883,7 +883,7 @@ int redisvFormatCommand(char **target, const char *format, va_list ap) {
         pos += sprintf(cmd+pos,"$%zu\r\n",sdslen(curargv[j]));
         memcpy(cmd+pos,curargv[j],sdslen(curargv[j]));
         pos += sdslen(curargv[j]);
-        sdsfree(curargv[j]);
+        sdsfree(curargv[j],PM_TRANS_RAM);
         cmd[pos++] = '\r';
         cmd[pos++] = '\n';
     }
@@ -896,11 +896,11 @@ int redisvFormatCommand(char **target, const char *format, va_list ap) {
 
 err:
     while(argc--)
-        sdsfree(curargv[argc]);
+        sdsfree(curargv[argc],PM_TRANS_RAM);
     free(curargv);
 
     if (curarg != NULL)
-        sdsfree(curarg);
+        sdsfree(curarg,PM_TRANS_RAM);
 
     /* No need to check cmd since it is the last statement that can fail,
      * but do it anyway to be as defensive as possible. */
@@ -995,7 +995,7 @@ static redisContext *redisContextInit(void) {
 
     c->err = 0;
     c->errstr[0] = '\0';
-    c->obuf = sdsempty();
+    c->obuf = sdsempty(PM_TRANS_RAM);
     c->reader = redisReaderCreate();
     return c;
 }
@@ -1004,7 +1004,7 @@ void redisFree(redisContext *c) {
     if (c->fd > 0)
         close(c->fd);
     if (c->obuf != NULL)
-        sdsfree(c->obuf);
+        sdsfree(c->obuf,PM_TRANS_RAM);
     if (c->reader != NULL)
         redisReaderFree(c->reader);
     free(c);
@@ -1186,8 +1186,8 @@ int redisBufferWrite(redisContext *c, int *done) {
             }
         } else if (nwritten > 0) {
             if (nwritten == (signed)sdslen(c->obuf)) {
-                sdsfree(c->obuf);
-                c->obuf = sdsempty();
+                sdsfree(c->obuf,PM_TRANS_RAM);
+                c->obuf = sdsempty(PM_TRANS_RAM);
             } else {
                 sdsrange(c->obuf,nwritten,-1);
             }

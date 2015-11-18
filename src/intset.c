@@ -94,10 +94,23 @@ static void _intsetSet(intset *is, int pos, int64_t value) {
 }
 
 /* Create an empty intset. */
-intset *intsetNew(void) {
-    intset *is = zmalloc(sizeof(intset));
+intset *intsetNew(PM_TRANS trans) {
+    intset *is = NULL;
+    if(PM_TRANS_RAM!=trans)
+    {
+        is = pm_trans_alloc(trans, sizeof(intset), PM_TAG_ALLOC_UNKN,NULL);
+    }
+    else
+    {
+        is = zmalloc(sizeof(intset));
+    }
+
     is->encoding = intrev32ifbe(INTSET_ENC_INT16);
     is->length = 0;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,is, sizeof(intset));
+    }
     return is;
 }
 

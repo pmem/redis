@@ -31,39 +31,110 @@
 #include "redis.h"
 #include <math.h>
 #include <ctype.h>
+#include "pm.h"
 
 #ifdef __CYGWIN__
 #define strtold(a,b) ((long double)strtod((a),(b)))
 #endif
 
-robj *createObject(int type, void *ptr) {
-    robj *o = zmalloc(sizeof(*o));
+
+/* Prepare object without persist.
+ * If transaction is other that NULL, then external have to be call pm_persist on object.
+ * */
+static inline
+void prepareObject_fast(int type, robj *o, void *ptr) {
+
     o->type = type;
     o->encoding = REDIS_ENCODING_RAW;
+    o->onealloc = 0;
     o->ptr = ptr;
     o->refcount = 1;
-
-    /* Set the LRU to the current lruclock (minutes resolution). */
+    // Set the LRU to the current lruclock (minutes resolution).
     o->lru = server.lruclock;
+
+}
+
+
+/* Create object without persist.
+ * If transaction is other that NULL, then external have to be call pm_persist on object.
+ * */
+static inline
+robj *createObject_fast(int type, void *ptr, PM_TRANS trans) {
+    robj *o = NULL;
+    if(PM_TRANS_RAM!=trans)
+    {
+        o = pm_trans_alloc(trans, sizeof(*o), PM_TAG_ALLOC_OBJ,NULL);
+    }
+    else
+    {
+        o = zmalloc(sizeof(*o));
+    }
+    prepareObject_fast(type, o, ptr);
     return o;
 }
 
-robj *createStringObject(char *ptr, size_t len) {
-    return createObject(REDIS_STRING,sdsnewlen(ptr,len));
+robj *createObject(int type, void *ptr, PM_TRANS trans) {
+    robj *o = createObject_fast(type, ptr,trans);
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
+    return o;
 }
 
-robj *createStringObjectFromLongLong(long long value) {
+robj *createStringObject(char *ptr, size_t len, PM_TRANS trans) {
+    robj *o = NULL;
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        carg c = {0};
+        size_t size = sizeof(robj) + sdsnewlen_alloc_size(len);
+        c.ptr = ptr;
+        c.len = len;
+        /* Set the LRU to the current lruclock (minutes resolution). */
+        c.lruclock = server.lruclock;
+        o = pm_trans_alloc(trans, size, PM_TAG_ALLOC_OBJ,&c);
+        /* Use one allocation to redis object and sds*/
+       // void* sds_hdr = ((void*)(((uintptr_t)o) + (uintptr_t)sizeof(robj)));
+       // sds str = sdsnewlen_prepare_buff(sds_hdr, ptr, len);
+       // prepareObject_fast(REDIS_STRING, o, str);
+        //o->onealloc=1;
+        //o->refcount = 0;
+        pmemobj_persist(trans,o, size);
+    }
+    else
+    {
+        o = createObject(REDIS_STRING,sdsnewlen_aligned(ptr,len,server.sds_alignment,trans),trans);
+    }
+    return o;
+}
+
+robj *createStringObjectFromLongLong(long long value, PM_TRANS trans) {
     robj *o;
-    if (value >= 0 && value < REDIS_SHARED_INTEGERS) {
-        incrRefCount(shared.integers[value]);
+    /* PM not support shared objects, because shared objects are only stored in RAM*/
+    if (value >= 0 && value < REDIS_SHARED_INTEGERS && PM_TRANS_RAM==trans) {
+        incrRefCount(shared.integers[value], PM_TRANS_RAM); /*Shared memory is only in ram*/
         o = shared.integers[value];
     } else {
         if (value >= LONG_MIN && value <= LONG_MAX) {
-            o = createObject(REDIS_STRING, NULL);
+            o = createStringObject(NULL, 0, trans);
             o->encoding = REDIS_ENCODING_INT;
             o->ptr = (void*)((long)value);
+            if(PM_TRANS_RAM!=trans)
+            {
+            	pmemobj_persist(trans,o, sizeof(robj));
+            }
         } else {
-            o = createObject(REDIS_STRING,sdsfromlonglong(value));
+            if(PM_TRANS_RAM == trans)
+            {
+                o = createObject(REDIS_STRING,sdsfromlonglong(value,trans), PM_TRANS_RAM);
+            }
+            else
+            {
+                sds sds_long = sdsfromlonglong(value,PM_TRANS_RAM);
+                o = createStringObject(sds_long, sdslen(sds_long), trans);
+                sdsfree(sds_long,PM_TRANS_RAM);
+            }
         }
     }
     return o;
@@ -75,7 +146,7 @@ robj *createStringObjectFromLongLong(long long value) {
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
-robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
+robj *createStringObjectFromLongDouble(long double value, int humanfriendly, PM_TRANS trans) {
     char buf[256];
     int len;
 
@@ -108,107 +179,264 @@ robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
     } else {
         len = snprintf(buf,sizeof(buf),"%.17Lg", value);
     }
-    return createStringObject(buf,len);
+    return createStringObject(buf,len,trans);
 }
 
-robj *dupStringObject(robj *o) {
+size_t getObjectSize(robj *o)
+{
+    size_t size =  sizeof(robj);
+    switch(o->type) {
+        case REDIS_STRING:
+            switch(o->encoding)
+            {
+                case REDIS_ENCODING_RAW:
+                    size += sdslen(o->ptr);
+                    break;
+                case REDIS_ENCODING_INT:
+                    //rob contain value
+                    break;
+                default:
+                    redisPanic("Unknown string type");
+            }
+            break;
+       /*case REDIS_LIST:
+
+            break;
+        case REDIS_SET:
+
+            break;
+        case REDIS_ZSET:
+
+            break;
+        case REDIS_HASH:
+
+            break;*/
+        default:
+            redisPanic("Not supported type robj to copy");
+            break;
+        }
+    return size;
+}
+
+robj *createValObject(robj *o, PM_TRANS trans)
+{
+    robj* copy = NULL;
+    switch(o->type) {
+    case REDIS_STRING:
+        switch(o->encoding)
+        {
+            case REDIS_ENCODING_RAW:
+                copy = dupStringObject(o, trans);
+                break;
+            case REDIS_ENCODING_INT:
+            {
+                //rob contain value
+                long long value = 0;
+                if(REDIS_OK == getLongLongFromObject(o, &value))
+                {
+                     copy = createStringObjectFromLongLong(value, trans);
+                }
+                else
+                {
+                    redisPanic("Encode error");
+                }
+                break;
+            }
+            default:
+                redisPanic("Unknown string type");
+        }
+
+        break;
+    default:
+        redisPanic("Not supported type robj to copy");
+        break;
+    }
+
+
+    return copy;
+}
+
+robj *dupStringObject(robj *o, PM_TRANS trans) {
     redisAssertWithInfo(NULL,o,o->encoding == REDIS_ENCODING_RAW);
-    return createStringObject(o->ptr,sdslen(o->ptr));
+    return createStringObject(o->ptr,sdslen(o->ptr),trans);
 }
 
-robj *createListObject(void) {
-    list *l = listCreate();
-    robj *o = createObject(REDIS_LIST,l);
+robj *createListObject(PM_TRANS trans) {
+    list *l = listCreate(trans);
+    robj *o = createObject_fast(REDIS_LIST,l,trans);
     listSetFreeMethod(l,decrRefCountVoid);
     o->encoding = REDIS_ENCODING_LINKEDLIST;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
     return o;
 }
 
-robj *createZiplistObject(void) {
-    unsigned char *zl = ziplistNew();
-    robj *o = createObject(REDIS_LIST,zl);
+robj *createZiplistObject(PM_TRANS trans) {
+    unsigned char *zl = NULL;
+    zl = ziplistNew(trans);
+    robj *o = createObject_fast(REDIS_LIST,zl, trans);
     o->encoding = REDIS_ENCODING_ZIPLIST;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
     return o;
 }
 
-robj *createSetObject(void) {
-    dict *d = dictCreate(&setDictType,NULL);
-    robj *o = createObject(REDIS_SET,d);
+robj *createSetObject(PM_TRANS trans) {
+    dict *d = dictCreate(&setDictType,trans);
+    robj *o = createObject_fast(REDIS_SET,d,trans);
     o->encoding = REDIS_ENCODING_HT;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
     return o;
 }
 
-robj *createIntsetObject(void) {
-    intset *is = intsetNew();
-    robj *o = createObject(REDIS_SET,is);
+robj *createIntsetObject(PM_TRANS trans) {
+    intset *is = intsetNew(trans);
+    robj *o = createObject_fast(REDIS_SET,is,trans);
     o->encoding = REDIS_ENCODING_INTSET;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
     return o;
 }
 
-robj *createHashObject(void) {
-    unsigned char *zl = ziplistNew();
-    robj *o = createObject(REDIS_HASH, zl);
+robj *createHashObject(PM_TRANS trans) {
+    unsigned char *zl = ziplistNew(trans);
+    robj *o = createObject_fast(REDIS_HASH, zl,trans);
     o->encoding = REDIS_ENCODING_ZIPLIST;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
     return o;
 }
 
-robj *createZsetObject(void) {
-    zset *zs = zmalloc(sizeof(*zs));
+robj *createZsetObject(PM_TRANS trans) {
+    zset *zs = NULL;
+    if(PM_TRANS_RAM!=trans)
+    {
+        zs = pm_trans_alloc(trans, sizeof(*zs), PM_TAG_ALLOC_UNKN,NULL);
+    }
+    else
+    {
+        zs = zmalloc(sizeof(*zs));
+    }
     robj *o;
 
-    zs->dict = dictCreate(&zsetDictType,NULL);
-    zs->zsl = zslCreate();
-    o = createObject(REDIS_ZSET,zs);
+    zs->dict = dictCreate(&zsetDictType,trans);
+    zs->zsl = zslCreate(trans);
+    o = createObject_fast(REDIS_ZSET,zs,trans);
     o->encoding = REDIS_ENCODING_SKIPLIST;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,zs, sizeof(*zs));
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
     return o;
 }
 
-robj *createZsetZiplistObject(void) {
-    unsigned char *zl = ziplistNew();
-    robj *o = createObject(REDIS_ZSET,zl);
+robj *createZsetZiplistObject(PM_TRANS trans) {
+    unsigned char *zl = ziplistNew(trans);
+    robj *o = createObject_fast(REDIS_ZSET,zl,trans);
     o->encoding = REDIS_ENCODING_ZIPLIST;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
     return o;
 }
 
-void freeStringObject(robj *o) {
+void freeStringObject(robj *o, PM_TRANS trans) {
     if (o->encoding == REDIS_ENCODING_RAW) {
-        sdsfree(o->ptr);
+        if(0 == o->onealloc)
+        {
+            sdsfree(o->ptr, trans);
+        }
+        else
+        {
+            /*Check that pointer was not changed*/
+            redisAssertWithInfo(NULL,o,(o->ptr == (((void*)(((uintptr_t)o) + (uintptr_t)sizeof(robj))) + sizeof(sds))));
+        }
     }
 }
 
-void freeListObject(robj *o) {
+void freeListObject(robj *o, PM_TRANS trans) {
     switch (o->encoding) {
     case REDIS_ENCODING_LINKEDLIST:
-        listRelease((list*) o->ptr);
+        listRelease((list*) o->ptr,trans);
         break;
     case REDIS_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        if(PM_TRANS_RAM!=trans)
+        {
+            pm_trans_free(trans, o->ptr);
+        }
+        else
+        {
+            zfree(o->ptr);
+        }
         break;
     default:
         redisPanic("Unknown list encoding type");
     }
 }
 
-void freeSetObject(robj *o) {
+void freeSetObject(robj *o, PM_TRANS trans) {
     switch (o->encoding) {
     case REDIS_ENCODING_HT:
+        redisAssertWithInfo(NULL,o,PM_TRANS_RAM==trans); /*Persistent memory not supported yet*/
         dictRelease((dict*) o->ptr);
         break;
     case REDIS_ENCODING_INTSET:
-        zfree(o->ptr);
+        if(PM_TRANS_RAM!=trans)
+        {
+            pm_trans_free(trans, o->ptr);
+        }
+        else
+        {
+            zfree(o->ptr);
+        }
         break;
     default:
         redisPanic("Unknown set encoding type");
     }
 }
 
-void freeZsetObject(robj *o) {
+void freeZsetObject_pm(robj *o, PM_TRANS trans) {
+    zset *zs;
+    switch (o->encoding) {
+    case REDIS_ENCODING_SKIPLIST:
+        zs = o->ptr;
+        dictRelease(zs->dict);/*TODO: Fix dictRelease_pm*/
+        zslFree(zs->zsl, trans);
+        pm_trans_free(trans, zs);
+        break;
+    case REDIS_ENCODING_ZIPLIST:
+        pm_trans_free(trans, o->ptr);
+        break;
+    default:
+        redisPanic("Unknown sorted set encoding");
+    }
+}
+
+void freeZsetObject(robj *o, PM_TRANS trans) {
+    if(PM_TRANS_RAM!=trans)
+    {
+        freeZsetObject_pm(o, trans);
+        return;
+    }
     zset *zs;
     switch (o->encoding) {
     case REDIS_ENCODING_SKIPLIST:
         zs = o->ptr;
         dictRelease(zs->dict);
-        zslFree(zs->zsl);
+        zslFree(zs->zsl,trans);
         zfree(zs);
         break;
     case REDIS_ENCODING_ZIPLIST:
@@ -219,13 +447,27 @@ void freeZsetObject(robj *o) {
     }
 }
 
-void freeHashObject(robj *o) {
+void freeHashObject(robj *o, PM_TRANS trans) {
     switch (o->encoding) {
     case REDIS_ENCODING_HT:
-        dictRelease((dict*) o->ptr);
+        if(PM_TRANS_RAM!=trans)
+        {
+            redisPanic("Delete dict from PM not supported yet");
+        }
+        else
+        {
+            dictRelease((dict*) o->ptr);
+        }
         break;
     case REDIS_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        if(PM_TRANS_RAM!=trans)
+        {
+            pm_trans_free(trans, o->ptr);
+        }
+        else
+        {
+            zfree(o->ptr);
+        }
         break;
     default:
         redisPanic("Unknown hash encoding type");
@@ -233,32 +475,56 @@ void freeHashObject(robj *o) {
     }
 }
 
-void incrRefCount(robj *o) {
+void incrRefCount(robj *o, PM_TRANS trans) {
     o->refcount++;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
+}
+/* Decrement "Reference Counter" from robj without removal object */
+void decrRefCountWithoutRemoval(robj *o, PM_TRANS trans) {
+    o->refcount--;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,o, sizeof(robj));
+    }
 }
 
-void decrRefCount(robj *o) {
-    if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
-    if (o->refcount == 1) {
+void decrRefCount(robj *o, PM_TRANS trans) {
+    //if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
+    //if (o->refcount == 1) {
+    if (o->refcount <= 1) {
         switch(o->type) {
-        case REDIS_STRING: freeStringObject(o); break;
-        case REDIS_LIST: freeListObject(o); break;
-        case REDIS_SET: freeSetObject(o); break;
-        case REDIS_ZSET: freeZsetObject(o); break;
-        case REDIS_HASH: freeHashObject(o); break;
+        case REDIS_STRING: freeStringObject(o, trans); break;
+        case REDIS_LIST: freeListObject(o, trans); break;
+        case REDIS_SET: freeSetObject(o,trans); break;
+        case REDIS_ZSET: freeZsetObject(o,trans); break;
+        case REDIS_HASH: freeHashObject(o,trans); break;
         default: redisPanic("Unknown object type"); break;
         }
-        zfree(o);
+        if(PM_TRANS_RAM!=trans)
+        {
+            pm_trans_free(trans, o);
+        }
+        else
+        {
+            zfree(o);
+        }
     } else {
         o->refcount--;
+        if(PM_TRANS_RAM!=trans)
+        {
+        	pmemobj_persist(trans,o, sizeof(robj));
+        }
     }
 }
 
 /* This variant of decrRefCount() gets its argument as void, and is useful
  * as free method in data structures that expect a 'void free_object(void*)'
  * prototype for the free method. */
-void decrRefCountVoid(void *o) {
-    decrRefCount(o);
+void decrRefCountVoid(void *o, PM_TRANS trans) {
+    decrRefCount(o, trans);
 }
 
 /* This function set the ref count to zero without freeing the object.
@@ -297,22 +563,18 @@ int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
 }
 
 /* Try to encode a string object in order to save space */
-robj *tryObjectEncoding(robj *o) {
+robj *tryObjectEncoding(robj *o, PM_TRANS trans) {
     long value;
     sds s = o->ptr;
     size_t len;
-
     if (o->encoding != REDIS_ENCODING_RAW)
         return o; /* Already encoded */
-
     /* It's not safe to encode shared objects: shared objects can be shared
      * everywhere in the "object space" of Redis. Encoded objects can only
      * appear as "values" (and not, for instance, as keys) */
      if (o->refcount > 1) return o;
-
     /* Currently we try to encode only strings */
     redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
-
     /* Check if we can represent this string as a long integer */
     len = sdslen(s);
     if (len > 21 || !string2l(s,len,&value)) {
@@ -330,7 +592,11 @@ robj *tryObjectEncoding(robj *o) {
             o->encoding == REDIS_ENCODING_RAW &&
             sdsavail(s) > len/10)
         {
-            o->ptr = sdsRemoveFreeSpace(o->ptr);
+            o->ptr = sdsRemoveFreeSpace(o->ptr,trans);
+            if(PM_TRANS_RAM!=trans)
+           {
+            	pmemobj_persist(trans,o, sizeof(robj));
+           }
         }
         /* Return the original object. */
         return o;
@@ -346,33 +612,37 @@ robj *tryObjectEncoding(robj *o) {
     if ((server.maxmemory == 0 ||
          (server.maxmemory_policy != REDIS_MAXMEMORY_VOLATILE_LRU &&
           server.maxmemory_policy != REDIS_MAXMEMORY_ALLKEYS_LRU)) &&
-        value >= 0 && value < REDIS_SHARED_INTEGERS)
+        value >= 0 && value < REDIS_SHARED_INTEGERS && PM_TRANS_RAM == trans)
     {
-        decrRefCount(o);
-        incrRefCount(shared.integers[value]);
+        decrRefCount(o, PM_TRANS_RAM);
+        incrRefCount(shared.integers[value],PM_TRANS_RAM); /*Shared memory is only in ram*/
         return shared.integers[value];
     } else {
-        o->encoding = REDIS_ENCODING_INT;
-        sdsfree(o->ptr);
-        o->ptr = (void*) value;
-        return o;
+        robj *o_new = createObject_fast(REDIS_STRING, (void*) value, trans);
+        o_new->encoding = REDIS_ENCODING_INT;
+        if(PM_TRANS_RAM!=trans)
+        {
+        	pmemobj_persist(trans,o_new, sizeof(robj));
+        }
+        decrRefCount(o, trans);
+        return o_new;
     }
 }
 
 /* Get a decoded version of an encoded object (returned as a new object).
  * If the object is already raw-encoded just increment the ref count. */
-robj *getDecodedObject(robj *o) {
+robj *getDecodedObject(robj *o, PM_TRANS trans) {
     robj *dec;
 
     if (o->encoding == REDIS_ENCODING_RAW) {
-        incrRefCount(o);
+        incrRefCount(o,trans);
         return o;
     }
     if (o->type == REDIS_STRING && o->encoding == REDIS_ENCODING_INT) {
         char buf[32];
 
         ll2string(buf,32,(long)o->ptr);
-        dec = createStringObject(buf,strlen(buf));
+        dec = createStringObject(buf,strlen(buf), trans);
         return dec;
     } else {
         redisPanic("Unknown encoding type");

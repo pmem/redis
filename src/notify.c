@@ -67,7 +67,7 @@ int keyspaceEventsStringToFlags(char *classes) {
 sds keyspaceEventsFlagsToString(int flags) {
     sds res;
 
-    res = sdsempty();
+    res = sdsempty(PM_TRANS_RAM);
     if ((flags & REDIS_NOTIFY_ALL) == REDIS_NOTIFY_ALL) {
         res = sdscatlen(res,"A",1);
     } else {
@@ -101,30 +101,30 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     /* If notifications for this class of events are off, return ASAP. */
     if (!(server.notify_keyspace_events & type)) return;
 
-    eventobj = createStringObject(event,strlen(event));
+    eventobj = createStringObject(event,strlen(event),PM_TRANS_RAM);
 
     /* __keyspace@<db>__:<key> <event> notifications. */
     if (server.notify_keyspace_events & REDIS_NOTIFY_KEYSPACE) {
-        chan = sdsnewlen("__keyspace@",11);
+        chan = sdsnewlen("__keyspace@",11,PM_TRANS_RAM);
         len = ll2string(buf,sizeof(buf),dbid);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
         chan = sdscatsds(chan, key->ptr);
-        chanobj = createObject(REDIS_STRING, chan);
+        chanobj = createObject(REDIS_STRING, chan, PM_TRANS_RAM);
         pubsubPublishMessage(chanobj, eventobj);
-        decrRefCount(chanobj);
+        decrRefCount(chanobj,PM_TRANS_RAM);
     }
 
     /* __keyevente@<db>__:<event> <key> notifications. */
     if (server.notify_keyspace_events & REDIS_NOTIFY_KEYEVENT) {
-        chan = sdsnewlen("__keyevent@",11);
+        chan = sdsnewlen("__keyevent@",11,PM_TRANS_RAM);
         if (len == -1) len = ll2string(buf,sizeof(buf),dbid);
         chan = sdscatlen(chan, buf, len);
         chan = sdscatlen(chan, "__:", 3);
         chan = sdscatsds(chan, eventobj->ptr);
-        chanobj = createObject(REDIS_STRING, chan);
+        chanobj = createObject(REDIS_STRING, chan, PM_TRANS_RAM);
         pubsubPublishMessage(chanobj, key);
-        decrRefCount(chanobj);
+        decrRefCount(chanobj,PM_TRANS_RAM);
     }
-    decrRefCount(eventobj);
+    decrRefCount(eventobj,PM_TRANS_RAM);
 }

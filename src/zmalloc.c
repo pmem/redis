@@ -192,6 +192,12 @@ size_t zmalloc_size(void *ptr) {
 }
 #endif
 
+/* Wraper to zfree() who ignore param trans */
+void zfree_trans(void *ptr, PM_TRANS trans)
+{
+    zfree(ptr);
+}
+
 void zfree(void *ptr) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;

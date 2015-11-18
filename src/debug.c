@@ -69,9 +69,9 @@ void xorDigest(unsigned char *digest, void *ptr, size_t len) {
 }
 
 void xorObjectDigest(unsigned char *digest, robj *o) {
-    o = getDecodedObject(o);
+    o = getDecodedObject(o,PM_TRANS_RAM);
     xorDigest(digest,o->ptr,sdslen(o->ptr));
-    decrRefCount(o);
+    decrRefCount(o,PM_TRANS_RAM);
 }
 
 /* This function instead of just computing the SHA1 and xoring it
@@ -99,9 +99,9 @@ void mixDigest(unsigned char *digest, void *ptr, size_t len) {
 }
 
 void mixObjectDigest(unsigned char *digest, robj *o) {
-    o = getDecodedObject(o);
+    o = getDecodedObject(o,PM_TRANS_RAM);
     mixDigest(digest,o->ptr,sdslen(o->ptr));
-    decrRefCount(o);
+    decrRefCount(o,PM_TRANS_RAM);
 }
 
 /* Compute the dataset digest. Since keys, sets elements, hashes elements
@@ -139,7 +139,7 @@ void computeDatasetDigest(unsigned char *final) {
 
             memset(digest,0,20); /* This key-val digest */
             key = dictGetKey(de);
-            keyobj = createStringObject(key,sdslen(key));
+            keyobj = createStringObject(key,sdslen(key),PM_TRANS_RAM);
 
             mixDigest(digest,key,sdslen(key));
 
@@ -158,15 +158,15 @@ void computeDatasetDigest(unsigned char *final) {
                 while(listTypeNext(li,&entry)) {
                     robj *eleobj = listTypeGet(&entry);
                     mixObjectDigest(digest,eleobj);
-                    decrRefCount(eleobj);
+                    decrRefCount(eleobj,PM_TRANS_RAM);
                 }
                 listTypeReleaseIterator(li);
             } else if (o->type == REDIS_SET) {
                 setTypeIterator *si = setTypeInitIterator(o);
                 robj *ele;
-                while((ele = setTypeNextObject(si)) != NULL) {
+                while((ele = setTypeNextObject(si,PM_TRANS_RAM)) != NULL) {
                     xorObjectDigest(digest,ele);
-                    decrRefCount(ele);
+                    decrRefCount(ele,PM_TRANS_RAM);
                 }
                 setTypeReleaseIterator(si);
             } else if (o->type == REDIS_ZSET) {
@@ -230,12 +230,12 @@ void computeDatasetDigest(unsigned char *final) {
                     unsigned char eledigest[20];
 
                     memset(eledigest,0,20);
-                    obj = hashTypeCurrentObject(hi,REDIS_HASH_KEY);
+                    obj = hashTypeCurrentObject(hi,REDIS_HASH_KEY,PM_TRANS_RAM);
                     mixObjectDigest(eledigest,obj);
-                    decrRefCount(obj);
-                    obj = hashTypeCurrentObject(hi,REDIS_HASH_VALUE);
+                    decrRefCount(obj,PM_TRANS_RAM);
+                    obj = hashTypeCurrentObject(hi,REDIS_HASH_VALUE,PM_TRANS_RAM);
                     mixObjectDigest(eledigest,obj);
-                    decrRefCount(obj);
+                    decrRefCount(obj,PM_TRANS_RAM);
                     xorDigest(digest,eledigest,20);
                 }
                 hashTypeReleaseIterator(hi);
@@ -246,7 +246,7 @@ void computeDatasetDigest(unsigned char *final) {
             if (expiretime != -1) xorDigest(digest,"!!expire!!",10);
             /* We can finally xor the key-val digest to the final digest */
             xorDigest(final,digest,20);
-            decrRefCount(keyobj);
+            decrRefCount(keyobj,PM_TRANS_RAM);
         }
         dictReleaseIterator(di);
     }
@@ -260,7 +260,7 @@ void debugCommand(redisClient *c) {
         zfree(ptr);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"assert")) {
-        if (c->argc >= 3) c->argv[2] = tryObjectEncoding(c->argv[2]);
+        if (c->argc >= 3) c->argv[2] = tryObjectEncoding(c->argv[2],PM_TRANS_RAM);
         redisAssertWithInfo(c,c->argv[0],1 == 2);
     } else if (!strcasecmp(c->argv[1]->ptr,"reload")) {
         if (rdbSave(server.rdb_filename) != REDIS_OK) {
@@ -337,27 +337,27 @@ void debugCommand(redisClient *c) {
         for (j = 0; j < keys; j++) {
             snprintf(buf,sizeof(buf),"%s:%lu",
                 (c->argc == 3) ? "key" : (char*)c->argv[3]->ptr, j);
-            key = createStringObject(buf,strlen(buf));
+            key = createStringObject(buf,strlen(buf),PM_TRANS_RAM);
             if (lookupKeyRead(c->db,key) != NULL) {
-                decrRefCount(key);
+                decrRefCount(key,PM_TRANS_RAM);
                 continue;
             }
             snprintf(buf,sizeof(buf),"value:%lu",j);
-            val = createStringObject(buf,strlen(buf));
-            dbAdd(c->db,key,val);
-            decrRefCount(key);
+            val = createStringObject(buf,strlen(buf),PM_TRANS_RAM);
+            dbAdd(c->db,key,val,PM_TRANS_RAM);
+            decrRefCount(key,PM_TRANS_RAM);
         }
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"digest") && c->argc == 2) {
         unsigned char digest[20];
-        sds d = sdsempty();
+        sds d = sdsempty(PM_TRANS_RAM);
         int j;
 
         computeDatasetDigest(digest);
         for (j = 0; j < 20; j++)
             d = sdscatprintf(d, "%02x",digest[j]);
         addReplyStatus(c,d);
-        sdsfree(d);
+        sdsfree(d,PM_TRANS_RAM);
     } else if (!strcasecmp(c->argv[1]->ptr,"sleep") && c->argc == 3) {
         double dtime = strtod(c->argv[2]->ptr,NULL);
         long long utime = dtime*1000000;
@@ -373,7 +373,7 @@ void debugCommand(redisClient *c) {
         server.active_expire_enabled = atoi(c->argv[2]->ptr);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"error") && c->argc == 3) {
-        sds errstr = sdsnewlen("-",1);
+        sds errstr = sdsnewlen("-",1,PM_TRANS_RAM);
 
         errstr = sdscatsds(errstr,c->argv[2]->ptr);
         errstr = sdsmapchars(errstr,"\n\r","  ",2); /* no newlines in errors. */
@@ -433,9 +433,9 @@ void redisLogObjectDebugInfo(robj *o) {
     if (o->type == REDIS_STRING && o->encoding == REDIS_ENCODING_RAW) {
         redisLog(REDIS_WARNING,"Object raw string len: %zu", sdslen(o->ptr));
         if (sdslen(o->ptr) < 4096) {
-            sds repr = sdscatrepr(sdsempty(),o->ptr,sdslen(o->ptr));
+            sds repr = sdscatrepr(sdsempty(PM_TRANS_RAM),o->ptr,sdslen(o->ptr));
             redisLog(REDIS_WARNING,"Object raw string content: %s", repr);
-            sdsfree(repr);
+            sdsfree(repr,PM_TRANS_RAM);
         }
     } else if (o->type == REDIS_LIST) {
         redisLog(REDIS_WARNING,"List length: %d", (int) listTypeLength(o));
@@ -694,15 +694,15 @@ void logCurrentClient(void) {
     int j;
 
     redisLog(REDIS_WARNING, "--- CURRENT CLIENT INFO");
-    client = catClientInfoString(sdsempty(),cc);
+    client = catClientInfoString(sdsempty(PM_TRANS_RAM),cc);
     redisLog(REDIS_WARNING,"client: %s", client);
-    sdsfree(client);
+    sdsfree(client,PM_TRANS_RAM);
     for (j = 0; j < cc->argc; j++) {
         robj *decoded;
 
-        decoded = getDecodedObject(cc->argv[j]);
+        decoded = getDecodedObject(cc->argv[j],PM_TRANS_RAM);
         redisLog(REDIS_WARNING,"argv[%d]: '%s'", j, (char*)decoded->ptr);
-        decrRefCount(decoded);
+        decrRefCount(decoded,PM_TRANS_RAM);
     }
     /* Check if the first argument, usually a key, is found inside the
      * selected DB, and if so print info about the associated object. */
@@ -710,14 +710,14 @@ void logCurrentClient(void) {
         robj *val, *key;
         dictEntry *de;
 
-        key = getDecodedObject(cc->argv[1]);
+        key = getDecodedObject(cc->argv[1],PM_TRANS_RAM);
         de = dictFind(cc->db->dict, key->ptr);
         if (de) {
             val = dictGetVal(de);
             redisLog(REDIS_WARNING,"key '%s' found in DB containing the following object:", (char*)key->ptr);
             redisLogObjectDebugInfo(val);
         }
-        decrRefCount(key);
+        decrRefCount(key,PM_TRANS_RAM);
     }
 }
 
@@ -830,8 +830,8 @@ void sigsegvHandler(int sig, siginfo_t *info, void *secret) {
     redisLog(REDIS_WARNING, "--- CLIENT LIST OUTPUT");
     clients = getAllClientsInfoString();
     redisLogRaw(REDIS_WARNING, clients);
-    sdsfree(infostring);
-    sdsfree(clients);
+    sdsfree(infostring,PM_TRANS_RAM);
+    sdsfree(clients,PM_TRANS_RAM);
 
     /* Log the current client */
     logCurrentClient();

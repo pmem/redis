@@ -85,7 +85,7 @@ static int callbackKeyCompare(void *privdata, const void *key1, const void *key2
 
 static void callbackKeyDestructor(void *privdata, void *key) {
     ((void) privdata);
-    sdsfree((sds)key);
+    sdsfree((sds)key,PM_TRANS_RAM);
 }
 
 static void callbackValDestructor(void *privdata, void *val) {
@@ -373,7 +373,7 @@ static int __redisGetSubscribeCallback(redisAsyncContext *ac, redisReply *reply,
 
         /* Locate the right callback */
         assert(reply->element[1]->type == REDIS_REPLY_STRING);
-        sname = sdsnewlen(reply->element[1]->str,reply->element[1]->len);
+        sname = sdsnewlen(reply->element[1]->str,reply->element[1]->len,PM_TRANS_RAM);
         de = dictFind(callbacks,sname);
         if (de != NULL) {
             memcpy(dstcb,dictGetEntryVal(de),sizeof(*dstcb));
@@ -389,7 +389,7 @@ static int __redisGetSubscribeCallback(redisAsyncContext *ac, redisReply *reply,
                     c->flags &= ~REDIS_SUBSCRIBED;
             }
         }
-        sdsfree(sname);
+        sdsfree(sname,PM_TRANS_RAM);
     } else {
         /* Shift callback for invalid commands. */
         __redisShiftCallback(&ac->sub.invalid,dstcb);
@@ -597,7 +597,7 @@ static int __redisAsyncCommand(redisAsyncContext *ac, redisCallbackFn *fn, void 
 
         /* Add every channel/pattern to the list of subscription callbacks. */
         while ((p = nextArgument(p,&astr,&alen)) != NULL) {
-            sname = sdsnewlen(astr,alen);
+            sname = sdsnewlen(astr,alen,PM_TRANS_RAM);
             if (pvariant)
                 dictReplace(ac->sub.patterns,sname,&cb);
             else

@@ -37,7 +37,7 @@
 /* Check the length of a number of objects to see if we need to convert a
  * ziplist to a real hash. Note that we only check string encoded objects
  * as their string length can be queried in constant time. */
-void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
+void hashTypeTryConversion(robj *o, robj **argv, int start, int end, PM_TRANS trans) {
     int i;
 
     if (o->encoding != REDIS_ENCODING_ZIPLIST) return;
@@ -46,17 +46,17 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
         if (argv[i]->encoding == REDIS_ENCODING_RAW &&
             sdslen(argv[i]->ptr) > server.hash_max_ziplist_value)
         {
-            hashTypeConvert(o, REDIS_ENCODING_HT);
+            hashTypeConvert(o, REDIS_ENCODING_HT, trans);
             break;
         }
     }
 }
 
 /* Encode given objects in-place when the hash uses a dict. */
-void hashTypeTryObjectEncoding(robj *subject, robj **o1, robj **o2) {
+void hashTypeTryObjectEncoding(robj *subject, robj **o1, robj **o2, PM_TRANS trans) {
     if (subject->encoding == REDIS_ENCODING_HT) {
-        if (o1) *o1 = tryObjectEncoding(*o1);
-        if (o2) *o2 = tryObjectEncoding(*o2);
+        if (o1) *o1 = tryObjectEncoding(*o1,trans);
+        if (o2) *o2 = tryObjectEncoding(*o2,trans);
     }
 }
 
@@ -65,14 +65,15 @@ void hashTypeTryObjectEncoding(robj *subject, robj **o1, robj **o2) {
 int hashTypeGetFromZiplist(robj *o, robj *field,
                            unsigned char **vstr,
                            unsigned int *vlen,
-                           long long *vll)
+                           long long *vll,
+                           PM_TRANS trans)
 {
     unsigned char *zl, *fptr = NULL, *vptr = NULL;
     int ret;
 
     redisAssert(o->encoding == REDIS_ENCODING_ZIPLIST);
 
-    field = getDecodedObject(field);
+    field = getDecodedObject(field,trans);
 
     zl = o->ptr;
     fptr = ziplistIndex(zl, ZIPLIST_HEAD);
@@ -85,7 +86,7 @@ int hashTypeGetFromZiplist(robj *o, robj *field,
         }
     }
 
-    decrRefCount(field);
+    decrRefCount(field,trans);
 
     if (vptr != NULL) {
         ret = ziplistGet(vptr, vstr, vlen, vll);
@@ -115,7 +116,7 @@ int hashTypeGetFromHashTable(robj *o, robj *field, robj **value) {
  *
  * The lower level function can prevent copy on write so it is
  * the preferred way of doing read operations. */
-robj *hashTypeGetObject(robj *o, robj *field) {
+robj *hashTypeGetObject(robj *o, robj *field, PM_TRANS trans) {
     robj *value = NULL;
 
     if (o->encoding == REDIS_ENCODING_ZIPLIST) {
@@ -123,11 +124,11 @@ robj *hashTypeGetObject(robj *o, robj *field) {
         unsigned int vlen = UINT_MAX;
         long long vll = LLONG_MAX;
 
-        if (hashTypeGetFromZiplist(o, field, &vstr, &vlen, &vll) == 0) {
+        if (hashTypeGetFromZiplist(o, field, &vstr, &vlen, &vll, trans) == 0) {
             if (vstr) {
-                value = createStringObject((char*)vstr, vlen);
+                value = createStringObject((char*)vstr, vlen, trans);
             } else {
-                value = createStringObjectFromLongLong(vll);
+                value = createStringObjectFromLongLong(vll, trans);
             }
         }
 
@@ -135,7 +136,7 @@ robj *hashTypeGetObject(robj *o, robj *field) {
         robj *aux;
 
         if (hashTypeGetFromHashTable(o, field, &aux) == 0) {
-            incrRefCount(aux);
+            incrRefCount(aux,PM_TRANS_RAM);
             value = aux;
         }
     } else {
@@ -146,13 +147,13 @@ robj *hashTypeGetObject(robj *o, robj *field) {
 
 /* Test if the specified field exists in the given hash. Returns 1 if the field
  * exists, and 0 when it doesn't. */
-int hashTypeExists(robj *o, robj *field) {
+int hashTypeExists(robj *o, robj *field, PM_TRANS trans) {
     if (o->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *vstr = NULL;
         unsigned int vlen = UINT_MAX;
         long long vll = LLONG_MAX;
 
-        if (hashTypeGetFromZiplist(o, field, &vstr, &vlen, &vll) == 0) return 1;
+        if (hashTypeGetFromZiplist(o, field, &vstr, &vlen, &vll, trans) == 0) return 1;
     } else if (o->encoding == REDIS_ENCODING_HT) {
         robj *aux;
 
@@ -167,14 +168,14 @@ int hashTypeExists(robj *o, robj *field) {
  * Return 0 on insert and 1 on update.
  * This function will take care of incrementing the reference count of the
  * retained fields and value objects. */
-int hashTypeSet(robj *o, robj *field, robj *value) {
+int hashTypeSet(robj *o, robj *field, robj *value, PM_TRANS trans) {
     int update = 0;
 
     if (o->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *zl, *fptr, *vptr;
 
-        field = getDecodedObject(field);
-        value = getDecodedObject(value);
+        field = getDecodedObject(field,trans);
+        value = getDecodedObject(value,trans);
 
         zl = o->ptr;
         fptr = ziplistIndex(zl, ZIPLIST_HEAD);
@@ -187,32 +188,32 @@ int hashTypeSet(robj *o, robj *field, robj *value) {
                 update = 1;
 
                 /* Delete value */
-                zl = ziplistDelete(zl, &vptr);
+                zl = ziplistDelete(zl, &vptr,trans);
 
                 /* Insert new value */
-                zl = ziplistInsert(zl, vptr, value->ptr, sdslen(value->ptr));
+                zl = ziplistInsert(zl, vptr, value->ptr, sdslen(value->ptr),trans);
             }
         }
 
         if (!update) {
             /* Push new field/value pair onto the tail of the ziplist */
-            zl = ziplistPush(zl, field->ptr, sdslen(field->ptr), ZIPLIST_TAIL);
-            zl = ziplistPush(zl, value->ptr, sdslen(value->ptr), ZIPLIST_TAIL);
+            zl = ziplistPush(zl, field->ptr, sdslen(field->ptr), ZIPLIST_TAIL,trans);
+            zl = ziplistPush(zl, value->ptr, sdslen(value->ptr), ZIPLIST_TAIL,trans);
         }
         o->ptr = zl;
-        decrRefCount(field);
-        decrRefCount(value);
+        decrRefCount(field,trans);
+        decrRefCount(value,trans);
 
         /* Check if the ziplist needs to be converted to a hash table */
         if (hashTypeLength(o) > server.hash_max_ziplist_entries)
-            hashTypeConvert(o, REDIS_ENCODING_HT);
+            hashTypeConvert(o, REDIS_ENCODING_HT, trans);
     } else if (o->encoding == REDIS_ENCODING_HT) {
-        if (dictReplace(o->ptr, field, value)) { /* Insert */
-            incrRefCount(field);
+        if (dictReplace(o->ptr, field, value,trans)) { /* Insert */
+            incrRefCount(field,trans);
         } else { /* Update */
             update = 1;
         }
-        incrRefCount(value);
+        incrRefCount(value,trans);
     } else {
         redisPanic("Unknown hash encoding");
     }
@@ -221,27 +222,27 @@ int hashTypeSet(robj *o, robj *field, robj *value) {
 
 /* Delete an element from a hash.
  * Return 1 on deleted and 0 on not found. */
-int hashTypeDelete(robj *o, robj *field) {
+int hashTypeDelete(robj *o, robj *field, PM_TRANS trans) {
     int deleted = 0;
 
     if (o->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *zl, *fptr;
 
-        field = getDecodedObject(field);
+        field = getDecodedObject(field,trans);
 
         zl = o->ptr;
         fptr = ziplistIndex(zl, ZIPLIST_HEAD);
         if (fptr != NULL) {
             fptr = ziplistFind(fptr, field->ptr, sdslen(field->ptr), 1);
             if (fptr != NULL) {
-                zl = ziplistDelete(zl,&fptr);
-                zl = ziplistDelete(zl,&fptr);
+                zl = ziplistDelete(zl,&fptr,trans);
+                zl = ziplistDelete(zl,&fptr,trans);
                 o->ptr = zl;
                 deleted = 1;
             }
         }
 
-        decrRefCount(field);
+        decrRefCount(field,trans);
 
     } else if (o->encoding == REDIS_ENCODING_HT) {
         if (dictDelete((dict*)o->ptr, field) == REDIS_OK) {
@@ -370,7 +371,7 @@ void hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, robj **dst) {
 /* A non copy-on-write friendly but higher level version of hashTypeCurrent*()
  * that returns an object with incremented refcount (or a new object). It is up
  * to the caller to decrRefCount() the object if no reference is retained. */
-robj *hashTypeCurrentObject(hashTypeIterator *hi, int what) {
+robj *hashTypeCurrentObject(hashTypeIterator *hi, int what, PM_TRANS trans) {
     robj *dst;
 
     if (hi->encoding == REDIS_ENCODING_ZIPLIST) {
@@ -380,14 +381,14 @@ robj *hashTypeCurrentObject(hashTypeIterator *hi, int what) {
 
         hashTypeCurrentFromZiplist(hi, what, &vstr, &vlen, &vll);
         if (vstr) {
-            dst = createStringObject((char*)vstr, vlen);
+            dst = createStringObject((char*)vstr, vlen, trans);
         } else {
-            dst = createStringObjectFromLongLong(vll);
+            dst = createStringObjectFromLongLong(vll, trans);
         }
 
     } else if (hi->encoding == REDIS_ENCODING_HT) {
         hashTypeCurrentFromHashTable(hi, what, &dst);
-        incrRefCount(dst);
+        incrRefCount(dst,trans);
 
     } else {
         redisPanic("Unknown hash encoding");
@@ -396,11 +397,11 @@ robj *hashTypeCurrentObject(hashTypeIterator *hi, int what) {
     return dst;
 }
 
-robj *hashTypeLookupWriteOrCreate(redisClient *c, robj *key) {
+robj *hashTypeLookupWriteOrCreate(redisClient *c, robj *key, PM_TRANS trans) {
     robj *o = lookupKeyWrite(c->db,key);
     if (o == NULL) {
-        o = createHashObject();
-        dbAdd(c->db,key,o);
+        o = createHashObject(trans);
+        dbAdd(c->db,key,o, trans);
     } else {
         if (o->type != REDIS_HASH) {
             addReply(c,shared.wrongtypeerr);
@@ -410,7 +411,7 @@ robj *hashTypeLookupWriteOrCreate(redisClient *c, robj *key) {
     return o;
 }
 
-void hashTypeConvertZiplist(robj *o, int enc) {
+void hashTypeConvertZiplist(robj *o, int enc, PM_TRANS trans) {
     redisAssert(o->encoding == REDIS_ENCODING_ZIPLIST);
 
     if (enc == REDIS_ENCODING_ZIPLIST) {
@@ -427,11 +428,11 @@ void hashTypeConvertZiplist(robj *o, int enc) {
         while (hashTypeNext(hi) != REDIS_ERR) {
             robj *field, *value;
 
-            field = hashTypeCurrentObject(hi, REDIS_HASH_KEY);
-            field = tryObjectEncoding(field);
-            value = hashTypeCurrentObject(hi, REDIS_HASH_VALUE);
-            value = tryObjectEncoding(value);
-            ret = dictAdd(dict, field, value);
+            field = hashTypeCurrentObject(hi, REDIS_HASH_KEY, trans);
+            field = tryObjectEncoding(field, trans);
+            value = hashTypeCurrentObject(hi, REDIS_HASH_VALUE, trans);
+            value = tryObjectEncoding(value, trans);
+            ret = dictAdd(dict, field, value, trans);
             if (ret != DICT_OK) {
                 redisLogHexDump(REDIS_WARNING,"ziplist with dup elements dump",
                     o->ptr,ziplistBlobLen(o->ptr));
@@ -450,9 +451,9 @@ void hashTypeConvertZiplist(robj *o, int enc) {
     }
 }
 
-void hashTypeConvert(robj *o, int enc) {
+void hashTypeConvert(robj *o, int enc, PM_TRANS trans) {
     if (o->encoding == REDIS_ENCODING_ZIPLIST) {
-        hashTypeConvertZiplist(o, enc);
+        hashTypeConvertZiplist(o, enc, trans);
     } else if (o->encoding == REDIS_ENCODING_HT) {
         redisPanic("Not implemented");
     } else {
@@ -468,30 +469,73 @@ void hsetCommand(redisClient *c) {
     int update;
     robj *o;
 
-    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
-    hashTypeTryConversion(o,c->argv,2,3);
-    hashTypeTryObjectEncoding(o,&c->argv[2], &c->argv[3]);
-    update = hashTypeSet(o,c->argv[2],c->argv[3]);
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1],trans)) == NULL)
+    {
+        if(PM_TRANS_RAM!=trans)
+        {
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
+        return;
+    }
+
+    hashTypeTryConversion(o,c->argv,2,3,trans);
+    hashTypeTryObjectEncoding(o,&c->argv[2], &c->argv[3],trans);
+    update = hashTypeSet(o,c->argv[2],c->argv[3],trans);
     addReply(c, update ? shared.czero : shared.cone);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(REDIS_NOTIFY_HASH,"hset",c->argv[1],c->db->id);
     server.dirty++;
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
 }
 
 void hsetnxCommand(redisClient *c) {
     robj *o;
-    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
-    hashTypeTryConversion(o,c->argv,2,3);
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
 
-    if (hashTypeExists(o, c->argv[2])) {
+    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1],trans)) == NULL)
+    {
+        if(PM_TRANS_RAM!=trans)
+        {
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
+        return;
+    }
+    hashTypeTryConversion(o,c->argv,2,3,trans);
+
+    if (hashTypeExists(o, c->argv[2],trans)) {
         addReply(c, shared.czero);
     } else {
-        hashTypeTryObjectEncoding(o,&c->argv[2], &c->argv[3]);
-        hashTypeSet(o,c->argv[2],c->argv[3]);
+        hashTypeTryObjectEncoding(o,&c->argv[2], &c->argv[3], trans);
+        hashTypeSet(o,c->argv[2],c->argv[3],trans);
         addReply(c, shared.cone);
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(REDIS_NOTIFY_HASH,"hset",c->argv[1],c->db->id);
         server.dirty++;
+    }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
     }
 }
 
@@ -504,12 +548,34 @@ void hmsetCommand(redisClient *c) {
         return;
     }
 
-    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
-    hashTypeTryConversion(o,c->argv,2,c->argc-1);
-    for (i = 2; i < c->argc; i += 2) {
-        hashTypeTryObjectEncoding(o,&c->argv[i], &c->argv[i+1]);
-        hashTypeSet(o,c->argv[i],c->argv[i+1]);
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
     }
+
+    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1],trans)) == NULL)
+    {
+        if(PM_TRANS_RAM!=trans)
+        {
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
+        return;
+    }
+    hashTypeTryConversion(o,c->argv,2,c->argc-1,trans);
+    for (i = 2; i < c->argc; i += 2) {
+        hashTypeTryObjectEncoding(o,&c->argv[i], &c->argv[i+1], trans);
+        hashTypeSet(o,c->argv[i],c->argv[i+1],trans);
+    }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     addReply(c, shared.ok);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(REDIS_NOTIFY_HASH,"hset",c->argv[1],c->db->id);
@@ -521,14 +587,34 @@ void hincrbyCommand(redisClient *c) {
     robj *o, *current, *new;
 
     if (getLongLongFromObjectOrReply(c,c->argv[3],&incr,NULL) != REDIS_OK) return;
-    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
-    if ((current = hashTypeGetObject(o,c->argv[2])) != NULL) {
+
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1], trans)) == NULL)
+    {
+        if(PM_TRANS_RAM!=trans)
+        {
+            pm_trans_end(trans);
+        }
+        return;
+    }
+    if ((current = hashTypeGetObject(o,c->argv[2],trans)) != NULL) {
         if (getLongLongFromObjectOrReply(c,current,&value,
             "hash value is not an integer") != REDIS_OK) {
-            decrRefCount(current);
+            decrRefCount(current,trans);
+            if(PM_TRANS_RAM!=trans)
+            {
+                /* Finish transaction*/
+                pm_trans_end(trans);
+            }
             return;
         }
-        decrRefCount(current);
+        decrRefCount(current,trans);
     } else {
         value = 0;
     }
@@ -539,11 +625,19 @@ void hincrbyCommand(redisClient *c) {
         addReplyError(c,"increment or decrement would overflow");
         return;
     }
+
     value += incr;
-    new = createStringObjectFromLongLong(value);
-    hashTypeTryObjectEncoding(o,&c->argv[2],NULL);
-    hashTypeSet(o,c->argv[2],new);
-    decrRefCount(new);
+    new = createStringObjectFromLongLong(value,trans);
+    hashTypeTryObjectEncoding(o,&c->argv[2],NULL,trans);
+    hashTypeSet(o,c->argv[2],new,trans);
+    decrRefCount(new,trans);
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     addReplyLongLong(c,value);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(REDIS_NOTIFY_HASH,"hincrby",c->argv[1],c->db->id);
@@ -555,22 +649,44 @@ void hincrbyfloatCommand(redisClient *c) {
     robj *o, *current, *new, *aux;
 
     if (getLongDoubleFromObjectOrReply(c,c->argv[3],&incr,NULL) != REDIS_OK) return;
-    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
-    if ((current = hashTypeGetObject(o,c->argv[2])) != NULL) {
+
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1],trans)) == NULL){
+        if(PM_TRANS_RAM!=trans)
+        {
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
+        return;
+    }
+    if ((current = hashTypeGetObject(o,c->argv[2],trans)) != NULL) {
         if (getLongDoubleFromObjectOrReply(c,current,&value,
             "hash value is not a valid float") != REDIS_OK) {
-            decrRefCount(current);
+            decrRefCount(current,trans);
+            if(PM_TRANS_RAM!=trans)
+            {
+                /* Finish transaction*/
+                pm_trans_end(trans);
+            }
             return;
         }
-        decrRefCount(current);
+        decrRefCount(current,trans);
     } else {
         value = 0;
     }
 
+
+
     value += incr;
-    new = createStringObjectFromLongDouble(value,1);
-    hashTypeTryObjectEncoding(o,&c->argv[2],NULL);
-    hashTypeSet(o,c->argv[2],new);
+    new = createStringObjectFromLongDouble(value,1,trans);
+    hashTypeTryObjectEncoding(o,&c->argv[2],NULL,trans);
+    hashTypeSet(o,c->argv[2],new,trans);
     addReplyBulk(c,new);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(REDIS_NOTIFY_HASH,"hincrbyfloat",c->argv[1],c->db->id);
@@ -579,14 +695,20 @@ void hincrbyfloatCommand(redisClient *c) {
     /* Always replicate HINCRBYFLOAT as an HSET command with the final value
      * in order to make sure that differences in float pricision or formatting
      * will not create differences in replicas or after an AOF restart. */
-    aux = createStringObject("HSET",4);
+    aux = createStringObject("HSET",4,trans);
     rewriteClientCommandArgument(c,0,aux);
-    decrRefCount(aux);
+    decrRefCount(aux,trans);
     rewriteClientCommandArgument(c,3,new);
-    decrRefCount(new);
+    decrRefCount(new,trans);
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
 }
 
-static void addHashFieldToReply(redisClient *c, robj *o, robj *field) {
+static void addHashFieldToReply(redisClient *c, robj *o, robj *field, PM_TRANS trans) {
     int ret;
 
     if (o == NULL) {
@@ -599,7 +721,7 @@ static void addHashFieldToReply(redisClient *c, robj *o, robj *field) {
         unsigned int vlen = UINT_MAX;
         long long vll = LLONG_MAX;
 
-        ret = hashTypeGetFromZiplist(o, field, &vstr, &vlen, &vll);
+        ret = hashTypeGetFromZiplist(o, field, &vstr, &vlen, &vll, trans);
         if (ret < 0) {
             addReply(c, shared.nullbulk);
         } else {
@@ -630,8 +752,20 @@ void hgetCommand(redisClient *c) {
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk)) == NULL ||
         checkType(c,o,REDIS_HASH)) return;
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
 
-    addHashFieldToReply(c, o, c->argv[2]);
+    addHashFieldToReply(c, o, c->argv[2],trans);
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
 }
 
 void hmgetCommand(redisClient *c) {
@@ -646,9 +780,22 @@ void hmgetCommand(redisClient *c) {
         return;
     }
 
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     addReplyMultiBulkLen(c, c->argc-2);
     for (i = 2; i < c->argc; i++) {
-        addHashFieldToReply(c, o, c->argv[i]);
+        addHashFieldToReply(c, o, c->argv[i],trans);
+    }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
     }
 }
 
@@ -659,8 +806,16 @@ void hdelCommand(redisClient *c) {
     if ((o = lookupKeyWriteOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_HASH)) return;
 
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+
     for (j = 2; j < c->argc; j++) {
-        if (hashTypeDelete(o,c->argv[j])) {
+        if (hashTypeDelete(o,c->argv[j],trans)) {
             deleted++;
             if (hashTypeLength(o) == 0) {
                 dbDelete(c->db,c->argv[1]);
@@ -669,6 +824,14 @@ void hdelCommand(redisClient *c) {
             }
         }
     }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
+
     if (deleted) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(REDIS_NOTIFY_HASH,"hdel",c->argv[1],c->db->id);
@@ -760,7 +923,20 @@ void hexistsCommand(redisClient *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_HASH)) return;
 
-    addReply(c, hashTypeExists(o,c->argv[2]) ? shared.cone : shared.czero);
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    addReply(c, hashTypeExists(o,c->argv[2], trans) ? shared.cone : shared.czero);
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
 }
 
 void hscanCommand(redisClient *c) {

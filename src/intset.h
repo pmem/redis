@@ -31,6 +31,7 @@
 #ifndef __INTSET_H
 #define __INTSET_H
 #include <stdint.h>
+#include "pm.h"
 
 typedef struct intset {
     uint32_t encoding;
@@ -38,7 +39,7 @@ typedef struct intset {
     int8_t contents[];
 } intset;
 
-intset *intsetNew(void);
+intset *intsetNew(PM_TRANS trans);
 intset *intsetAdd(intset *is, int64_t value, uint8_t *success);
 intset *intsetRemove(intset *is, int64_t value, int *success);
 uint8_t intsetFind(intset *is, int64_t value);

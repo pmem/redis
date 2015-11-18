@@ -13,7 +13,7 @@ void createDumpPayload(rio *payload, robj *o) {
 
     /* Serialize the object in a RDB-like format. It consist of an object type
      * byte followed by the serialized object. This is understood by RESTORE. */
-    rioInitWithBuffer(payload,sdsempty());
+    rioInitWithBuffer(payload,sdsempty(PM_TRANS_RAM));
     redisAssert(rdbSaveObjectType(payload,o));
     redisAssert(rdbSaveObject(payload,o));
 
@@ -76,9 +76,9 @@ void dumpCommand(redisClient *c) {
     createDumpPayload(&payload,o);
 
     /* Transfer to the client */
-    dumpobj = createObject(REDIS_STRING,payload.io.buffer.ptr);
+    dumpobj = createObject(REDIS_STRING,payload.io.buffer.ptr,PM_TRANS_RAM);
     addReplyBulk(c,dumpobj);
-    decrRefCount(dumpobj);
+    decrRefCount(dumpobj,PM_TRANS_RAM);
     return;
 }
 
@@ -110,16 +110,37 @@ void restoreCommand(redisClient *c) {
         return;
     }
 
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     rioInitWithBuffer(&payload,c->argv[3]->ptr);
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type,&payload)) == NULL))
+        ((obj = rdbLoadObject(type,&payload,trans)) == NULL))
     {
+        if(PM_TRANS_RAM!=trans)
+        {
+            /* Finish transaction*/
+            pm_trans_clean(trans);
+            pm_trans_end(trans);
+        }
         addReplyError(c,"Bad data format");
         return;
     }
 
     /* Create the key and set the TTL if any */
-    dbAdd(c->db,c->argv[1],obj);
+    dbAdd(c->db,c->argv[1],obj, trans);
+
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     if (ttl) setExpire(c->db,c->argv[1],mstime()+ttl);
     signalModifiedKey(c->db,c->argv[1]);
     addReply(c,shared.ok);
@@ -146,7 +167,7 @@ void migrateCommand(redisClient *c) {
      * nothing to migrate (for instance the key expired in the meantime), but
      * we include such information in the reply string. */
     if ((o = lookupKeyRead(c->db,c->argv[3])) == NULL) {
-        addReplySds(c,sdsnew("+NOKEY\r\n"));
+        addReplySds(c,sdsnew("+NOKEY\r\n",PM_TRANS_RAM));
         return;
     }
 
@@ -159,12 +180,12 @@ void migrateCommand(redisClient *c) {
         return;
     }
     if ((aeWait(fd,AE_WRITABLE,timeout*1000) & AE_WRITABLE) == 0) {
-        addReplySds(c,sdsnew("-IOERR error or timeout connecting to the client\r\n"));
+        addReplySds(c,sdsnew("-IOERR error or timeout connecting to the client\r\n",PM_TRANS_RAM));
         return;
     }
 
     /* Create RESTORE payload and generate the protocol to call the command. */
-    rioInitWithBuffer(&cmd,sdsempty());
+    rioInitWithBuffer(&cmd,sdsempty(PM_TRANS_RAM));
     redisAssertWithInfo(c,NULL,rioWriteBulkCount(&cmd,'*',2));
     redisAssertWithInfo(c,NULL,rioWriteBulkString(&cmd,"SELECT",6));
     redisAssertWithInfo(c,NULL,rioWriteBulkLongLong(&cmd,dbid));
@@ -185,7 +206,7 @@ void migrateCommand(redisClient *c) {
     createDumpPayload(&payload,o);
     redisAssertWithInfo(c,NULL,rioWriteBulkString(&cmd,payload.io.buffer.ptr,
                                 sdslen(payload.io.buffer.ptr)));
-    sdsfree(payload.io.buffer.ptr);
+    sdsfree(payload.io.buffer.ptr,PM_TRANS_RAM);
 
     /* Tranfer the query to the other node in 64K chunks. */
     {
@@ -223,25 +244,25 @@ void migrateCommand(redisClient *c) {
             server.dirty++;
 
             /* Translate MIGRATE as DEL for replication/AOF. */
-            aux = createStringObject("DEL",3);
+            aux = createStringObject("DEL",3,PM_TRANS_RAM);
             rewriteClientCommandVector(c,2,aux,c->argv[3]);
-            decrRefCount(aux);
+            decrRefCount(aux,PM_TRANS_RAM);
         }
     }
 
-    sdsfree(cmd.io.buffer.ptr);
+    sdsfree(cmd.io.buffer.ptr,PM_TRANS_RAM);
     close(fd);
     return;
 
 socket_wr_err:
-    addReplySds(c,sdsnew("-IOERR error or timeout writing to target instance\r\n"));
-    sdsfree(cmd.io.buffer.ptr);
+    addReplySds(c,sdsnew("-IOERR error or timeout writing to target instance\r\n",PM_TRANS_RAM));
+    sdsfree(cmd.io.buffer.ptr,PM_TRANS_RAM);
     close(fd);
     return;
 
 socket_rd_err:
-    addReplySds(c,sdsnew("-IOERR error or timeout reading from target node\r\n"));
-    sdsfree(cmd.io.buffer.ptr);
+    addReplySds(c,sdsnew("-IOERR error or timeout reading from target node\r\n",PM_TRANS_RAM));
+    sdsfree(cmd.io.buffer.ptr,PM_TRANS_RAM);
     close(fd);
     return;
 }

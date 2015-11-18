@@ -159,10 +159,10 @@ void luaPushError(lua_State *lua, char *error) {
 
     /* Attempt to figure out where this function was called, if possible */
     if(lua_getstack(lua, 1, &dbg) && lua_getinfo(lua, "nSl", &dbg)) {
-        sds msg = sdscatprintf(sdsempty(), "%s: %d: %s",
+        sds msg = sdscatprintf(sdsempty(PM_TRANS_RAM), "%s: %d: %s",
             dbg.source, dbg.currentline, error);
         lua_pushstring(lua, msg);
-        sdsfree(msg);
+        sdsfree(msg,PM_TRANS_RAM);
     } else {
         lua_pushstring(lua, error);
     }
@@ -273,7 +273,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             sh->free += sh->len - obj_len;
             sh->len = obj_len;
         } else {
-            argv[j] = createStringObject(obj_s, obj_len);
+            argv[j] = createStringObject(obj_s, obj_len,PM_TRANS_RAM);
         }
     }
 
@@ -283,7 +283,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
     if (j != argc) {
         j--;
         while (j >= 0) {
-            decrRefCount(argv[j]);
+            decrRefCount(argv[j],PM_TRANS_RAM);
             j--;
         }
         luaPushError(lua,
@@ -369,13 +369,13 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         reply = c->buf;
         c->bufpos = 0;
     } else {
-        reply = sdsnewlen(c->buf,c->bufpos);
+        reply = sdsnewlen(c->buf,c->bufpos,PM_TRANS_RAM);
         c->bufpos = 0;
         while(listLength(c->reply)) {
             robj *o = listNodeValue(listFirst(c->reply));
 
             reply = sdscatlen(reply,o->ptr,sdslen(o->ptr));
-            listDelNode(c->reply,listFirst(c->reply));
+            listDelNode(c->reply,listFirst(c->reply),PM_TRANS_RAM);
         }
     }
     if (raise_error && reply[0] != '-') raise_error = 0;
@@ -386,7 +386,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         (reply[0] == '*' && reply[1] != '-')) {
             luaSortArray(lua);
     }
-    if (reply != c->buf) sdsfree(reply);
+    if (reply != c->buf) sdsfree(reply,PM_TRANS_RAM);
     c->reply_bytes = 0;
 
 cleanup:
@@ -405,11 +405,11 @@ cleanup:
         {
             struct sdshdr *sh = (void*)(((char*)(o->ptr))-(sizeof(struct sdshdr)));
 
-            if (cached_objects[j]) decrRefCount(cached_objects[j]);
+            if (cached_objects[j]) decrRefCount(cached_objects[j],PM_TRANS_RAM);
             cached_objects[j] = o;
             cached_objects_len[j] = sh->free + sh->len;
         } else {
-            decrRefCount(o);
+            decrRefCount(o,PM_TRANS_RAM);
         }
     }
 
@@ -506,7 +506,7 @@ int luaLogCommand(lua_State *lua) {
     }
 
     /* Glue together all the arguments */
-    log = sdsempty();
+    log = sdsempty(PM_TRANS_RAM);
     for (j = 1; j < argc; j++) {
         size_t len;
         char *s;
@@ -518,7 +518,7 @@ int luaLogCommand(lua_State *lua) {
         }
     }
     redisLogRaw(level,log);
-    sdsfree(log);
+    sdsfree(log,PM_TRANS_RAM);
     return 0;
 }
 
@@ -588,7 +588,7 @@ void luaRemoveUnsupportedFunctions(lua_State *lua) {
  * sequence, because it may interact with creation of globals. */
 void scriptingEnableGlobalsProtection(lua_State *lua) {
     char *s[32];
-    sds code = sdsempty();
+    sds code = sdsempty(PM_TRANS_RAM);
     int j = 0;
 
     /* strict.lua from: http://metalua.luaforge.net/src/lib/strict.lua.html.
@@ -617,7 +617,7 @@ void scriptingEnableGlobalsProtection(lua_State *lua) {
     for (j = 0; s[j] != NULL; j++) code = sdscatlen(code,s[j],strlen(s[j]));
     luaL_loadbuffer(lua,code,sdslen(code),"@enable_strict_lua");
     lua_pcall(lua,0,0,0);
-    sdsfree(code);
+    sdsfree(code,PM_TRANS_RAM);
 }
 
 /* Initialize the scripting environment.
@@ -804,10 +804,10 @@ void luaReplyToRedisReply(redisClient *c, lua_State *lua) {
         lua_gettable(lua,-2);
         t = lua_type(lua,-1);
         if (t == LUA_TSTRING) {
-            sds err = sdsnew(lua_tostring(lua,-1));
+            sds err = sdsnew(lua_tostring(lua,-1),PM_TRANS_RAM);
             sdsmapchars(err,"\r\n","  ",2);
-            addReplySds(c,sdscatprintf(sdsempty(),"-%s\r\n",err));
-            sdsfree(err);
+            addReplySds(c,sdscatprintf(sdsempty(PM_TRANS_RAM),"-%s\r\n",err));
+            sdsfree(err,PM_TRANS_RAM);
             lua_pop(lua,2);
             return;
         }
@@ -817,10 +817,10 @@ void luaReplyToRedisReply(redisClient *c, lua_State *lua) {
         lua_gettable(lua,-2);
         t = lua_type(lua,-1);
         if (t == LUA_TSTRING) {
-            sds ok = sdsnew(lua_tostring(lua,-1));
+            sds ok = sdsnew(lua_tostring(lua,-1),PM_TRANS_RAM);
             sdsmapchars(ok,"\r\n","  ",2);
-            addReplySds(c,sdscatprintf(sdsempty(),"+%s\r\n",ok));
-            sdsfree(ok);
+            addReplySds(c,sdscatprintf(sdsempty(PM_TRANS_RAM),"+%s\r\n",ok));
+            sdsfree(ok,PM_TRANS_RAM);
             lua_pop(lua,1);
         } else {
             void *replylen = addDeferredMultiBulkLength(c);
@@ -870,7 +870,7 @@ void luaSetGlobalArray(lua_State *lua, char *var, robj **elev, int elec) {
  * On error REDIS_ERR is returned and an appropriate error is set in the
  * client context. */
 int luaCreateFunction(redisClient *c, lua_State *lua, char *funcname, robj *body) {
-    sds funcdef = sdsempty();
+    sds funcdef = sdsempty(PM_TRANS_RAM);
 
     funcdef = sdscat(funcdef,"function ");
     funcdef = sdscatlen(funcdef,funcname,42);
@@ -882,10 +882,10 @@ int luaCreateFunction(redisClient *c, lua_State *lua, char *funcname, robj *body
         addReplyErrorFormat(c,"Error compiling script (new function): %s\n",
             lua_tostring(lua,-1));
         lua_pop(lua,1);
-        sdsfree(funcdef);
+        sdsfree(funcdef,PM_TRANS_RAM);
         return REDIS_ERR;
     }
-    sdsfree(funcdef);
+    sdsfree(funcdef,PM_TRANS_RAM);
     if (lua_pcall(lua,0,0,0)) {
         addReplyErrorFormat(c,"Error running script (new function): %s\n",
             lua_tostring(lua,-1));
@@ -898,9 +898,9 @@ int luaCreateFunction(redisClient *c, lua_State *lua, char *funcname, robj *body
      * EVALSHA commands as EVAL using the original script. */
     {
         int retval = dictAdd(server.lua_scripts,
-                             sdsnewlen(funcname+2,40),body);
+                             sdsnewlen(funcname+2,40,PM_TRANS_RAM),body,PM_TRANS_RAM);
         redisAssertWithInfo(c,NULL,retval == DICT_OK);
-        incrRefCount(body);
+        incrRefCount(body,PM_TRANS_RAM);
     }
     return REDIS_OK;
 }
@@ -1068,7 +1068,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
             replicationScriptCacheAdd(c->argv[1]->ptr);
             redisAssertWithInfo(c,NULL,script != NULL);
             rewriteClientCommandArgument(c,0,
-                resetRefCount(createStringObject("EVAL",4)));
+                resetRefCount(createStringObject("EVAL",4,PM_TRANS_RAM)));
             rewriteClientCommandArgument(c,1,script);
             forceCommandPropagation(c,REDIS_PROPAGATE_REPL|REDIS_PROPAGATE_AOF);
         }
@@ -1157,22 +1157,22 @@ void scriptCommand(redisClient *c) {
         funcname[0] = 'f';
         funcname[1] = '_';
         sha1hex(funcname+2,c->argv[2]->ptr,sdslen(c->argv[2]->ptr));
-        sha = sdsnewlen(funcname+2,40);
+        sha = sdsnewlen(funcname+2,40,PM_TRANS_RAM);
         if (dictFind(server.lua_scripts,sha) == NULL) {
             if (luaCreateFunction(c,server.lua,funcname,c->argv[2])
                     == REDIS_ERR) {
-                sdsfree(sha);
+                sdsfree(sha,PM_TRANS_RAM);
                 return;
             }
         }
         addReplyBulkCBuffer(c,funcname+2,40);
-        sdsfree(sha);
+        sdsfree(sha,PM_TRANS_RAM);
         forceCommandPropagation(c,REDIS_PROPAGATE_REPL|REDIS_PROPAGATE_AOF);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"kill")) {
         if (server.lua_caller == NULL) {
-            addReplySds(c,sdsnew("-NOTBUSY No scripts in execution right now.\r\n"));
+            addReplySds(c,sdsnew("-NOTBUSY No scripts in execution right now.\r\n",PM_TRANS_RAM));
         } else if (server.lua_write_dirty) {
-            addReplySds(c,sdsnew("-UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.\r\n"));
+            addReplySds(c,sdsnew("-UNKILLABLE Sorry the script already executed write commands against the dataset. You can either wait the script termination or kill the server in a hard way using the SHUTDOWN NOSAVE command.\r\n",PM_TRANS_RAM));
         } else {
             server.lua_kill = 1;
             addReply(c,shared.ok);

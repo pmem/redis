@@ -578,7 +578,7 @@ int hllSparseToDense(robj *o) {
     /* Create a string of the right size filled with zero bytes.
      * Note that the cached cardinality is set to 0 as a side effect
      * that is exactly the cardinality of an empty HLL. */
-    dense = sdsnewlen(NULL,HLL_DENSE_SIZE);
+    dense = sdsnewlen(NULL,HLL_DENSE_SIZE,PM_TRANS_RAM);
     hdr = (struct hllhdr*) dense;
     *hdr = *oldhdr; /* This will copy the magic and cached cardinality. */
     hdr->encoding = HLL_DENSE;
@@ -609,12 +609,12 @@ int hllSparseToDense(robj *o) {
     /* If the sparse representation was valid, we expect to find idx
      * set to HLL_REGISTERS. */
     if (idx != HLL_REGISTERS) {
-        sdsfree(dense);
+        sdsfree(dense,PM_TRANS_RAM);
         return REDIS_ERR;
     }
 
     /* Free the old representation and set the new one. */
-    sdsfree(o->ptr);
+    sdsfree(o->ptr,PM_TRANS_RAM);
     o->ptr = dense;
     return REDIS_OK;
 }
@@ -1099,7 +1099,7 @@ robj *createHLLObject(void) {
     /* Populate the sparse representation with as many XZERO opcodes as
      * needed to represent all the registers. */
     aux = HLL_REGISTERS;
-    s = sdsnewlen(NULL,sparselen);
+    s = sdsnewlen(NULL,sparselen,PM_TRANS_RAM);
     p = (uint8_t*)s + HLL_HDR_SIZE;
     while(aux) {
         int xzero = HLL_SPARSE_XZERO_MAX_LEN;
@@ -1111,7 +1111,7 @@ robj *createHLLObject(void) {
     redisAssert((p-(uint8_t*)s) == sparselen);
 
     /* Create the actual object. */
-    o = createObject(REDIS_STRING,s);
+    o = createObject(REDIS_STRING,s,PM_TRANS_RAM);
     hdr = o->ptr;
     memcpy(hdr->magic,"HYLL",4);
     hdr->encoding = HLL_SPARSE;
@@ -1147,7 +1147,7 @@ int isHLLObjectOrReply(redisClient *c, robj *o) {
 invalid:
     addReplySds(c,
         sdsnew("-WRONGTYPE Key is not a valid "
-               "HyperLogLog string value.\r\n"));
+               "HyperLogLog string value.\r\n",PM_TRANS_RAM));
     return REDIS_ERR;
 }
 
@@ -1162,11 +1162,11 @@ void pfaddCommand(redisClient *c) {
          * hold our HLL data structure. sdsnewlen() when NULL is passed
          * is guaranteed to return bytes initialized to zero. */
         o = createHLLObject();
-        dbAdd(c->db,c->argv[1],o);
+        dbAdd(c->db,c->argv[1],o,PM_TRANS_RAM);
         updated++;
     } else {
         if (isHLLObjectOrReply(c,o) != REDIS_OK) return;
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
+        o = dbUnshareStringValue(c->db,c->argv[1],o,PM_TRANS_RAM);
     }
     /* Perform the low level ADD operation for every element. */
     for (j = 2; j < c->argc; j++) {
@@ -1177,7 +1177,7 @@ void pfaddCommand(redisClient *c) {
             updated++;
             break;
         case -1:
-            addReplySds(c,sdsnew(invalid_hll_err));
+            addReplySds(c,sdsnew(invalid_hll_err,PM_TRANS_RAM));
             return;
         }
     }
@@ -1219,7 +1219,7 @@ void pfcountCommand(redisClient *c) {
             /* Merge with this HLL with our 'max' HHL by setting max[i]
              * to MAX(max[i],hll[i]). */
             if (hllMerge(registers,o) == REDIS_ERR) {
-                addReplySds(c,sdsnew(invalid_hll_err));
+                addReplySds(c,sdsnew(invalid_hll_err,PM_TRANS_RAM));
                 return;
             }
         }
@@ -1240,7 +1240,7 @@ void pfcountCommand(redisClient *c) {
         addReply(c,shared.czero);
     } else {
         if (isHLLObjectOrReply(c,o) != REDIS_OK) return;
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
+        o = dbUnshareStringValue(c->db,c->argv[1],o,PM_TRANS_RAM);
 
         /* Check if the cached cardinality is valid. */
         hdr = o->ptr;
@@ -1259,7 +1259,7 @@ void pfcountCommand(redisClient *c) {
             /* Recompute it and update the cached value. */
             card = hllCount(hdr,&invalid);
             if (invalid) {
-                addReplySds(c,sdsnew(invalid_hll_err));
+                addReplySds(c,sdsnew(invalid_hll_err,PM_TRANS_RAM));
                 return;
             }
             hdr->card[0] = card & 0xff;
@@ -1300,7 +1300,7 @@ void pfmergeCommand(redisClient *c) {
         /* Merge with this HLL with our 'max' HHL by setting max[i]
          * to MAX(max[i],hll[i]). */
         if (hllMerge(max,o) == REDIS_ERR) {
-            addReplySds(c,sdsnew(invalid_hll_err));
+            addReplySds(c,sdsnew(invalid_hll_err,PM_TRANS_RAM));
             return;
         }
     }
@@ -1312,17 +1312,17 @@ void pfmergeCommand(redisClient *c) {
          * hold our HLL data structure. sdsnewlen() when NULL is passed
          * is guaranteed to return bytes initialized to zero. */
         o = createHLLObject();
-        dbAdd(c->db,c->argv[1],o);
+        dbAdd(c->db,c->argv[1],o,PM_TRANS_RAM);
     } else {
         /* If key exists we are sure it's of the right type/size
          * since we checked when merging the different HLLs, so we
          * don't check again. */
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
+        o = dbUnshareStringValue(c->db,c->argv[1],o,PM_TRANS_RAM);
     }
 
     /* Only support dense objects as destination. */
     if (hllSparseToDense(o) == REDIS_ERR) {
-        addReplySds(c,sdsnew(invalid_hll_err));
+        addReplySds(c,sdsnew(invalid_hll_err,PM_TRANS_RAM));
         return;
     }
 
@@ -1350,7 +1350,7 @@ void pfmergeCommand(redisClient *c) {
 #define HLL_TEST_CYCLES 1000
 void pfselftestCommand(redisClient *c) {
     unsigned int j, i;
-    sds bitcounters = sdsnewlen(NULL,HLL_DENSE_SIZE);
+    sds bitcounters = sdsnewlen(NULL,HLL_DENSE_SIZE,PM_TRANS_RAM);
     struct hllhdr *hdr = (struct hllhdr*) bitcounters, *hdr2;
     robj *o = NULL;
     uint8_t bytecounters[HLL_REGISTERS];
@@ -1446,8 +1446,8 @@ void pfselftestCommand(redisClient *c) {
     addReply(c,shared.ok);
 
 cleanup:
-    sdsfree(bitcounters);
-    if (o) decrRefCount(o);
+    sdsfree(bitcounters,PM_TRANS_RAM);
+    if (o) decrRefCount(o,PM_TRANS_RAM);
 }
 
 /* PFDEBUG <subcommand> <key> ... args ...
@@ -1464,7 +1464,7 @@ void pfdebugCommand(redisClient *c) {
         return;
     }
     if (isHLLObjectOrReply(c,o) != REDIS_OK) return;
-    o = dbUnshareStringValue(c->db,c->argv[2],o);
+    o = dbUnshareStringValue(c->db,c->argv[2],o,PM_TRANS_RAM);
     hdr = o->ptr;
 
     /* PFDEBUG GETREG <key> */
@@ -1473,7 +1473,7 @@ void pfdebugCommand(redisClient *c) {
 
         if (hdr->encoding == HLL_SPARSE) {
             if (hllSparseToDense(o) == REDIS_ERR) {
-                addReplySds(c,sdsnew(invalid_hll_err));
+                addReplySds(c,sdsnew(invalid_hll_err,PM_TRANS_RAM));
                 return;
             }
             server.dirty++; /* Force propagation on encoding change. */
@@ -1493,7 +1493,7 @@ void pfdebugCommand(redisClient *c) {
         if (c->argc != 3) goto arityerr;
 
         uint8_t *p = o->ptr, *end = p+sdslen(o->ptr);
-        sds decoded = sdsempty();
+        sds decoded = sdsempty(PM_TRANS_RAM);
 
         if (hdr->encoding != HLL_SPARSE) {
             addReplyError(c,"HLL encoding is not sparse");
@@ -1521,7 +1521,7 @@ void pfdebugCommand(redisClient *c) {
         }
         decoded = sdstrim(decoded," ");
         addReplyBulkCBuffer(c,decoded,sdslen(decoded));
-        sdsfree(decoded);
+        sdsfree(decoded,PM_TRANS_RAM);
     }
     /* PFDEBUG ENCODING <key> */
     else if (!strcasecmp(cmd,"encoding")) {
@@ -1537,7 +1537,7 @@ void pfdebugCommand(redisClient *c) {
 
         if (hdr->encoding == HLL_SPARSE) {
             if (hllSparseToDense(o) == REDIS_ERR) {
-                addReplySds(c,sdsnew(invalid_hll_err));
+                addReplySds(c,sdsnew(invalid_hll_err,PM_TRANS_RAM));
                 return;
             }
             conv = 1;

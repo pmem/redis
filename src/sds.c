@@ -28,6 +28,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,18 @@
 #include <assert.h>
 #include "sds.h"
 #include "zmalloc.h"
+#include "pm.h"
+
+sds sdsnewlen_prepare_buff(struct sdshdr* hdr_buff, const void *init, size_t initlen)
+{
+    if (hdr_buff == NULL) return NULL;
+    hdr_buff->len = initlen;
+    hdr_buff->free = 0;
+    if (initlen && init)
+        memcpy(hdr_buff->buf, init, initlen);
+    hdr_buff->buf[initlen] = '\0';
+    return (char*)hdr_buff->buf;
+}
 
 /* Create a new sds string with the content specified by the 'init' pointer
  * and 'initlen'.
@@ -48,44 +61,122 @@
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
  * \0 characters in the middle, as the length is stored in the sds header. */
-sds sdsnewlen(const void *init, size_t initlen) {
+sds sdsnewlen(const void *init, size_t initlen, PM_TRANS trans) {
     struct sdshdr *sh;
+    size_t size = sizeof(struct sdshdr)+initlen+1;
 
-    if (init) {
-        sh = zmalloc(sizeof(struct sdshdr)+initlen+1);
+    if (PM_TRANS_RAM!=trans) {
+        sh = pm_trans_alloc(trans, size, PM_TAG_ALLOC_SDS,NULL); /* Alloc after finish transaction*/
+        if (!init) {
+            memset(sh, 0, size);
+        }
     } else {
-        sh = zcalloc(sizeof(struct sdshdr)+initlen+1);
+        if (init) {
+            sh = zmalloc(size);
+        } else {
+            sh = zcalloc(size);
+        }
     }
+
     if (sh == NULL) return NULL;
     sh->len = initlen;
     sh->free = 0;
-    if (initlen && init)
+    if (initlen && init) {
         memcpy(sh->buf, init, initlen);
+    }
     sh->buf[initlen] = '\0';
+
+    if (PM_TRANS_RAM!=trans) {
+    	pmemobj_persist(trans,sh, size);
+    }
+    return (char*)sh->buf;
+}
+
+/*
+ * 'align' must be power of 2
+ * Allocates a new sds of the total size aligned to the nearest multiply
+ * of 'align' (if not 0).
+ */
+sds sdsnewlen_aligned(const void *init, size_t initlen, size_t align, PM_TRANS trans)
+{
+    struct sdshdr *sh;
+
+    size_t sds_size = sizeof(struct sdshdr)+initlen+1;
+    if (align != 0) {
+        sds_size = (sds_size + (align - 1)) & ~(align - 1);
+    }
+
+    if (PM_TRANS_RAM!=trans) {
+        sh = pm_trans_alloc(trans, sds_size, PM_TAG_ALLOC_SDS,NULL); /* Alloc after finish transaction*/
+        if (!init) {
+            memset(sh, 0, sds_size);
+        }
+    } else {
+        if (init) {
+            sh = zmalloc(sds_size);
+        } else {
+            sh = zcalloc(sds_size);
+        }
+    }
+
+    if (sh == NULL) return NULL;
+    sh->len = initlen;
+    sh->free = sds_size-sizeof(struct sdshdr)-initlen-1;
+    if (initlen && init) {
+        memcpy(sh->buf, init, initlen);
+    }
+    sh->buf[initlen] = '\0';
+
+    if (PM_TRANS_RAM!=trans) {
+    	pmemobj_persist(trans,sh, sds_size);
+    }
     return (char*)sh->buf;
 }
 
 /* Create an empty (zero length) sds string. Even in this case the string
  * always has an implicit null term. */
-sds sdsempty(void) {
-    return sdsnewlen("",0);
+sds sdsempty(PM_TRANS trans) {
+    return sdsnewlen("",0, trans);
 }
 
 /* Create a new sds string starting from a null terminated C string. */
-sds sdsnew(const char *init) {
+sds sdsnew(const char *init, PM_TRANS trans) {
     size_t initlen = (init == NULL) ? 0 : strlen(init);
-    return sdsnewlen(init, initlen);
+    return sdsnewlen(init, initlen, trans);
 }
 
 /* Duplicate an sds string. */
-sds sdsdup(const sds s) {
-    return sdsnewlen(s, sdslen(s));
+sds sdsdup_pm(const sds s, PM_TRANS trans) {
+    struct sdshdr *sh_src = (void*)(s-(sizeof(struct sdshdr)));
+    size_t size = sizeof(struct sdshdr)+sh_src->len+sh_src->free+1;
+    struct sdshdr *sh_dst;
+    sh_dst = pm_trans_alloc(trans, size, PM_TAG_ALLOC_SDS,NULL); /* Alloc after finish transaction*/
+    //TODO: manage
+    pmem_memcpy_persistPM(sh_dst, sh_src, size);  /* memcpy + pmem_persist_pool */
+    return (char*)sh_dst->buf;
+}
+
+
+
+sds sdsdup(const sds s, PM_TRANS trans) {
+    if(PM_TRANS_RAM!=trans)
+    {
+        return sdsdup_pm(s, trans);
+    }
+    return sdsnewlen(s, sdslen(s),PM_TRANS_RAM);
 }
 
 /* Free an sds string. No operation is performed if 's' is NULL. */
-void sdsfree(sds s) {
+void sdsfree(sds s, PM_TRANS trans) {
     if (s == NULL) return;
-    zfree(s-sizeof(struct sdshdr));
+    if(PM_TRANS_RAM!=trans)
+    {
+        pm_trans_free(trans, s-sizeof(struct sdshdr));
+    }
+    else
+    {
+        zfree(s-sizeof(struct sdshdr));
+    }
 }
 
 /* Set the sds string length to the length as obtained with strlen(), so
@@ -152,12 +243,23 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
  *
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
-sds sdsRemoveFreeSpace(sds s) {
+sds sdsRemoveFreeSpace(sds s, PM_TRANS trans) {
     struct sdshdr *sh;
 
     sh = (void*) (s-(sizeof(struct sdshdr)));
-    sh = zrealloc(sh, sizeof(struct sdshdr)+sh->len+1);
-    sh->free = 0;
+    size_t new_size = sizeof(struct sdshdr)+sh->len+1;
+    if(PM_TRANS_RAM!=trans)
+    {
+        sh = pm_trans_realloc(trans, sh, new_size);
+        sh->free = 0;
+        pmemobj_persist(trans,sh, new_size);
+    }
+    else
+    {
+        sh = zrealloc(sh, new_size);
+        sh->free = 0;
+    }
+
     return sh->buf;
 }
 
@@ -362,11 +464,11 @@ int sdsull2str(char *s, unsigned long long v) {
  *
  * sdscatprintf(sdsempty(),"%lld\n", value);
  */
-sds sdsfromlonglong(long long value) {
+sds sdsfromlonglong(long long value,PM_TRANS trans) {
     char buf[SDS_LLSTR_SIZE];
     int len = sdsll2str(buf,value);
 
-    return sdsnewlen(buf,len);
+    return sdsnewlen(buf,len,trans);
 }
 
 /* Like sdscatprintf() but gets va_list instead of being variadic. */
@@ -678,7 +780,9 @@ int sdscmp(const sds s1, const sds s2) {
  * requires length arguments. sdssplit() is just the
  * same function but for zero-terminated strings.
  */
-sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count) {
+sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count, PM_TRANS trans) {
+    assert(PM_TRANS_RAM==trans); /* Not support PM yet!!!*/
+
     int elements = 0, slots = 5, start = 0, j;
     sds *tokens;
 
@@ -703,7 +807,7 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
         }
         /* search the separator */
         if ((seplen == 1 && *(s+j) == sep[0]) || (memcmp(s+j,sep,seplen) == 0)) {
-            tokens[elements] = sdsnewlen(s+start,j-start);
+            tokens[elements] = sdsnewlen(s+start,j-start, trans);
             if (tokens[elements] == NULL) goto cleanup;
             elements++;
             start = j+seplen;
@@ -711,7 +815,7 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
         }
     }
     /* Add the final element. We are sure there is room in the tokens array. */
-    tokens[elements] = sdsnewlen(s+start,len-start);
+    tokens[elements] = sdsnewlen(s+start,len-start, trans);
     if (tokens[elements] == NULL) goto cleanup;
     elements++;
     *count = elements;
@@ -720,7 +824,7 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
 cleanup:
     {
         int i;
-        for (i = 0; i < elements; i++) sdsfree(tokens[i]);
+        for (i = 0; i < elements; i++) sdsfree(tokens[i], trans);
         zfree(tokens);
         *count = 0;
         return NULL;
@@ -728,12 +832,14 @@ cleanup:
 }
 
 /* Free the result returned by sdssplitlen(), or do nothing if 'tokens' is NULL. */
-void sdsfreesplitres(sds *tokens, int count) {
+void sdsfreesplitres(sds *tokens, int count, PM_TRANS trans) {
+    assert(PM_TRANS_RAM==trans); /* Not support PM yet!!!*/
     if (!tokens) return;
     while(count--)
-        sdsfree(tokens[count]);
+        sdsfree(tokens[count], trans);
     zfree(tokens);
 }
+
 
 /* Append to the sds string "s" an escaped string representation where
  * all the non-printable characters (tested with isprint()) are turned into
@@ -831,7 +937,7 @@ sds *sdssplitargs(const char *line, int *argc) {
             int insq=0; /* set to 1 if we are in 'single quotes' */
             int done=0;
 
-            if (current == NULL) current = sdsempty();
+            if (current == NULL) current = sdsempty(PM_TRANS_RAM);
             while(!done) {
                 if (inq) {
                     if (*p == '\\' && *(p+1) == 'x' &&
@@ -919,9 +1025,9 @@ sds *sdssplitargs(const char *line, int *argc) {
 
 err:
     while((*argc)--)
-        sdsfree(vector[*argc]);
+        sdsfree(vector[*argc], PM_TRANS_RAM);
     zfree(vector);
-    if (current) sdsfree(current);
+    if (current) sdsfree(current, PM_TRANS_RAM);
     *argc = 0;
     return NULL;
 }
@@ -952,7 +1058,7 @@ sds sdsmapchars(sds s, const char *from, const char *to, size_t setlen) {
 /* Join an array of C strings using the specified separator (also a C string).
  * Returns the result as an sds string. */
 sds sdsjoin(char **argv, int argc, char *sep) {
-    sds join = sdsempty();
+    sds join = sdsempty(PM_TRANS_RAM);
     int j;
 
     for (j = 0; j < argc; j++) {

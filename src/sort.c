@@ -68,28 +68,28 @@ robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst) {
      * to implement the "SORT ... GET #" feature. */
     spat = pattern->ptr;
     if (spat[0] == '#' && spat[1] == '\0') {
-        incrRefCount(subst);
+        incrRefCount(subst,PM_TRANS_RAM);
         return subst;
     }
 
     /* The substitution object may be specially encoded. If so we create
      * a decoded object on the fly. Otherwise getDecodedObject will just
      * increment the ref count, that we'll decrement later. */
-    subst = getDecodedObject(subst);
+    subst = getDecodedObject(subst,PM_TRANS_RAM);
     ssub = subst->ptr;
 
     /* If we can't find '*' in the pattern we return NULL as to GET a
      * fixed key does not make sense. */
     p = strchr(spat,'*');
     if (!p) {
-        decrRefCount(subst);
+        decrRefCount(subst,PM_TRANS_RAM);
         return NULL;
     }
 
     /* Find out if we're dealing with a hash dereference. */
     if ((f = strstr(p+1, "->")) != NULL && *(f+2) != '\0') {
         fieldlen = sdslen(spat)-(f-spat)-2;
-        fieldobj = createStringObject(f+2,fieldlen);
+        fieldobj = createStringObject(f+2,fieldlen,PM_TRANS_RAM);
     } else {
         fieldlen = 0;
     }
@@ -98,12 +98,12 @@ robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst) {
     prefixlen = p-spat;
     sublen = sdslen(ssub);
     postfixlen = sdslen(spat)-(prefixlen+1)-(fieldlen ? fieldlen+2 : 0);
-    keyobj = createStringObject(NULL,prefixlen+sublen+postfixlen);
+    keyobj = createStringObject(NULL,prefixlen+sublen+postfixlen,PM_TRANS_RAM);
     k = keyobj->ptr;
     memcpy(k,spat,prefixlen);
     memcpy(k+prefixlen,ssub,sublen);
     memcpy(k+prefixlen+sublen,p+1,postfixlen);
-    decrRefCount(subst); /* Incremented by decodeObject() */
+    decrRefCount(subst,PM_TRANS_RAM); /* Incremented by decodeObject() */
 
     /* Lookup substituted key */
     o = lookupKeyRead(db,keyobj);
@@ -114,21 +114,21 @@ robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst) {
 
         /* Retrieve value from hash by the field name. This operation
          * already increases the refcount of the returned object. */
-        o = hashTypeGetObject(o, fieldobj);
+        o = hashTypeGetObject(o, fieldobj,PM_TRANS_RAM);
     } else {
         if (o->type != REDIS_STRING) goto noobj;
 
         /* Every object that this function returns needs to have its refcount
          * increased. sortCommand decreases it again. */
-        incrRefCount(o);
+        incrRefCount(o,PM_TRANS_RAM);
     }
-    decrRefCount(keyobj);
-    if (fieldobj) decrRefCount(fieldobj);
+    decrRefCount(keyobj,PM_TRANS_RAM);
+    if (fieldobj) decrRefCount(fieldobj,PM_TRANS_RAM);
     return o;
 
 noobj:
-    decrRefCount(keyobj);
-    if (fieldlen) decrRefCount(fieldobj);
+    decrRefCount(keyobj,PM_TRANS_RAM);
+    if (fieldlen) decrRefCount(fieldobj,PM_TRANS_RAM);
     return NULL;
 }
 
@@ -209,17 +209,17 @@ void sortCommand(redisClient *c) {
 
     /* Create a list of operations to perform for every sorted element.
      * Operations can be GET/DEL/INCR/DECR */
-    operations = listCreate();
-    listSetFreeMethod(operations,zfree);
+    operations = listCreate(PM_TRANS_RAM);
+    listSetFreeMethod(operations,zfree_trans);
     j = 2; /* options start at argv[2] */
 
     /* Now we need to protect sortval incrementing its count, in the future
      * SORT may have options able to overwrite/delete keys during the sorting
      * and the sorted key itself may get destroyed */
     if (sortval)
-        incrRefCount(sortval);
+        incrRefCount(sortval,PM_TRANS_RAM);
     else
-        sortval = createListObject();
+        sortval = createListObject(PM_TRANS_RAM);
 
     /* The SORT command has an SQL-alike syntax, parse it */
     while(j < c->argc) {
@@ -236,8 +236,8 @@ void sortCommand(redisClient *c) {
                 (getLongFromObjectOrReply(c, c->argv[j+2], &limit_count, NULL)
                  != REDIS_OK))
             {
-                decrRefCount(sortval);
-                listRelease(operations);
+                decrRefCount(sortval,PM_TRANS_RAM);
+                listRelease(operations,PM_TRANS_RAM);
                 return;
             }
             j+=2;
@@ -252,12 +252,12 @@ void sortCommand(redisClient *c) {
             j++;
         } else if (!strcasecmp(c->argv[j]->ptr,"get") && leftargs >= 1) {
             listAddNodeTail(operations,createSortOperation(
-                REDIS_SORT_GET,c->argv[j+1]));
+                REDIS_SORT_GET,c->argv[j+1]),PM_TRANS_RAM);
             getop++;
             j++;
         } else {
-            decrRefCount(sortval);
-            listRelease(operations);
+            decrRefCount(sortval,PM_TRANS_RAM);
+            listRelease(operations,PM_TRANS_RAM);
             addReply(c,shared.syntaxerr);
             return;
         }
@@ -282,7 +282,9 @@ void sortCommand(redisClient *c) {
 
     /* Destructively convert encoded sorted sets for SORT. */
     if (sortval->type == REDIS_ZSET)
-        zsetConvert(sortval, REDIS_ENCODING_SKIPLIST);
+    {
+        zsetConvert(sortval, REDIS_ENCODING_SKIPLIST,PM_TRANS_RAM);
+    }
 
     /* Objtain the length of the object to sort. */
     switch(sortval->type) {
@@ -335,7 +337,7 @@ void sortCommand(redisClient *c) {
     } else if (sortval->type == REDIS_SET) {
         setTypeIterator *si = setTypeInitIterator(sortval);
         robj *ele;
-        while((ele = setTypeNextObject(si)) != NULL) {
+        while((ele = setTypeNextObject(si,PM_TRANS_RAM)) != NULL) {
             vector[j].obj = ele;
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
@@ -415,7 +417,7 @@ void sortCommand(redisClient *c) {
             }
 
             if (alpha) {
-                if (sortby) vector[j].u.cmpobj = getDecodedObject(byval);
+                if (sortby) vector[j].u.cmpobj = getDecodedObject(byval,PM_TRANS_RAM);
             } else {
                 if (byval->encoding == REDIS_ENCODING_RAW) {
                     char *eptr;
@@ -439,7 +441,7 @@ void sortCommand(redisClient *c) {
             /* when the object was retrieved using lookupKeyByPattern,
              * its refcount needs to be decreased. */
             if (sortby) {
-                decrRefCount(byval);
+                decrRefCount(byval,PM_TRANS_RAM);
             }
         }
     }
@@ -479,7 +481,7 @@ void sortCommand(redisClient *c) {
                         addReply(c,shared.nullbulk);
                     } else {
                         addReplyBulk(c,val);
-                        decrRefCount(val);
+                        decrRefCount(val,PM_TRANS_RAM);
                     }
                 } else {
                     /* Always fails */
@@ -488,7 +490,7 @@ void sortCommand(redisClient *c) {
             }
         }
     } else {
-        robj *sobj = createZiplistObject();
+        robj *sobj = createZiplistObject(PM_TRANS_RAM);
 
         /* STORE option specified, set the sorting result as a List object */
         for (j = start; j <= end; j++) {
@@ -496,7 +498,7 @@ void sortCommand(redisClient *c) {
             listIter li;
 
             if (!getop) {
-                listTypePush(sobj,vector[j].obj,REDIS_TAIL);
+                listTypePush(sobj,vector[j].obj,REDIS_TAIL,PM_TRANS_RAM);
             } else {
                 listRewind(operations,&li);
                 while((ln = listNext(&li))) {
@@ -505,13 +507,13 @@ void sortCommand(redisClient *c) {
                         vector[j].obj);
 
                     if (sop->type == REDIS_SORT_GET) {
-                        if (!val) val = createStringObject("",0);
+                        if (!val) val = createStringObject("",0,PM_TRANS_RAM);
 
                         /* listTypePush does an incrRefCount, so we should take care
                          * care of the incremented refcount caused by either
                          * lookupKeyByPattern or createStringObject("",0) */
-                        listTypePush(sobj,val,REDIS_TAIL);
-                        decrRefCount(val);
+                        listTypePush(sobj,val,REDIS_TAIL,PM_TRANS_RAM);
+                        decrRefCount(val,PM_TRANS_RAM);
                     } else {
                         /* Always fails */
                         redisAssertWithInfo(c,sortval,sop->type == REDIS_SORT_GET);
@@ -520,7 +522,7 @@ void sortCommand(redisClient *c) {
             }
         }
         if (outputlen) {
-            setKey(c->db,storekey,sobj);
+            setKey(c->db,storekey,sobj,PM_TRANS_RAM);
             notifyKeyspaceEvent(REDIS_NOTIFY_LIST,"sortstore",storekey,
                                 c->db->id);
             server.dirty += outputlen;
@@ -529,19 +531,19 @@ void sortCommand(redisClient *c) {
             notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",storekey,c->db->id);
             server.dirty++;
         }
-        decrRefCount(sobj);
+        decrRefCount(sobj,PM_TRANS_RAM);
         addReplyLongLong(c,outputlen);
     }
 
     /* Cleanup */
     if (sortval->type == REDIS_LIST || sortval->type == REDIS_SET)
         for (j = 0; j < vectorlen; j++)
-            decrRefCount(vector[j].obj);
-    decrRefCount(sortval);
-    listRelease(operations);
+            decrRefCount(vector[j].obj,PM_TRANS_RAM);
+    decrRefCount(sortval,PM_TRANS_RAM);
+    listRelease(operations,PM_TRANS_RAM);
     for (j = 0; j < vectorlen; j++) {
         if (alpha && vector[j].u.cmpobj)
-            decrRefCount(vector[j].u.cmpobj);
+            decrRefCount(vector[j].u.cmpobj,PM_TRANS_RAM);
     }
     zfree(vector);
 }

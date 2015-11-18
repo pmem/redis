@@ -42,7 +42,7 @@ size_t zmalloc_size_sds(sds s) {
 }
 
 void *dupClientReplyValue(void *o) {
-    incrRefCount((robj*)o);
+    incrRefCount((robj*)o,PM_TRANS_RAM);
     return o;
 }
 
@@ -76,7 +76,7 @@ redisClient *createClient(int fd) {
     c->fd = fd;
     c->name = NULL;
     c->bufpos = 0;
-    c->querybuf = sdsempty();
+    c->querybuf = sdsempty(PM_TRANS_RAM);
     c->querybuf_peak = 0;
     c->reqtype = 0;
     c->argc = 0;
@@ -95,7 +95,7 @@ redisClient *createClient(int fd) {
     c->repl_ack_time = 0;
     c->slave_listening_port = 0;
     c->slave_capa = SLAVE_CAPA_NONE;
-    c->reply = listCreate();
+    c->reply = listCreate(PM_TRANS_RAM);
     c->reply_bytes = 0;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply,decrRefCountVoid);
@@ -103,13 +103,13 @@ redisClient *createClient(int fd) {
     c->bpop.keys = dictCreate(&setDictType,NULL);
     c->bpop.timeout = 0;
     c->bpop.target = NULL;
-    c->watched_keys = listCreate();
+    c->watched_keys = listCreate(PM_TRANS_RAM);
     c->pubsub_channels = dictCreate(&setDictType,NULL);
-    c->pubsub_patterns = listCreate();
+    c->pubsub_patterns = listCreate(PM_TRANS_RAM);
     c->peerid = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
-    if (fd != -1) listAddNodeTail(server.clients,c);
+    if (fd != -1) listAddNodeTail(server.clients,c,PM_TRANS_RAM);
     initClientMultiState(c);
     return c;
 }
@@ -150,8 +150,8 @@ robj *dupLastObjectIfNeeded(list *reply) {
     ln = listLast(reply);
     cur = listNodeValue(ln);
     if (cur->refcount > 1) {
-        new = dupStringObject(cur);
-        decrRefCount(cur);
+        new = dupStringObject(cur, PM_TRANS_RAM);
+        decrRefCount(cur, PM_TRANS_RAM);
         listNodeValue(ln) = new;
     }
     return listNodeValue(ln);
@@ -184,8 +184,8 @@ void _addReplyObjectToList(redisClient *c, robj *o) {
     if (c->flags & REDIS_CLOSE_AFTER_REPLY) return;
 
     if (listLength(c->reply) == 0) {
-        incrRefCount(o);
-        listAddNodeTail(c->reply,o);
+        incrRefCount(o,PM_TRANS_RAM);
+        listAddNodeTail(c->reply,o,PM_TRANS_RAM);
         c->reply_bytes += zmalloc_size_sds(o->ptr);
     } else {
         tail = listNodeValue(listLast(c->reply));
@@ -199,8 +199,8 @@ void _addReplyObjectToList(redisClient *c, robj *o) {
             tail->ptr = sdscatlen(tail->ptr,o->ptr,sdslen(o->ptr));
             c->reply_bytes += zmalloc_size_sds(tail->ptr);
         } else {
-            incrRefCount(o);
-            listAddNodeTail(c->reply,o);
+            incrRefCount(o,PM_TRANS_RAM);
+            listAddNodeTail(c->reply,o,PM_TRANS_RAM);
             c->reply_bytes += zmalloc_size_sds(o->ptr);
         }
     }
@@ -213,12 +213,12 @@ void _addReplySdsToList(redisClient *c, sds s) {
     robj *tail;
 
     if (c->flags & REDIS_CLOSE_AFTER_REPLY) {
-        sdsfree(s);
+        sdsfree(s, PM_TRANS_RAM);
         return;
     }
 
     if (listLength(c->reply) == 0) {
-        listAddNodeTail(c->reply,createObject(REDIS_STRING,s));
+        listAddNodeTail(c->reply,createObject(REDIS_STRING,s,PM_TRANS_RAM),PM_TRANS_RAM);
         c->reply_bytes += zmalloc_size_sds(s);
     } else {
         tail = listNodeValue(listLast(c->reply));
@@ -231,9 +231,9 @@ void _addReplySdsToList(redisClient *c, sds s) {
             tail = dupLastObjectIfNeeded(c->reply);
             tail->ptr = sdscatlen(tail->ptr,s,sdslen(s));
             c->reply_bytes += zmalloc_size_sds(tail->ptr);
-            sdsfree(s);
+            sdsfree(s, NULL);
         } else {
-            listAddNodeTail(c->reply,createObject(REDIS_STRING,s));
+            listAddNodeTail(c->reply,createObject(REDIS_STRING,s,PM_TRANS_RAM),PM_TRANS_RAM);
             c->reply_bytes += zmalloc_size_sds(s);
         }
     }
@@ -246,9 +246,9 @@ void _addReplyStringToList(redisClient *c, char *s, size_t len) {
     if (c->flags & REDIS_CLOSE_AFTER_REPLY) return;
 
     if (listLength(c->reply) == 0) {
-        robj *o = createStringObject(s,len);
+        robj *o = createStringObject(s,len,PM_TRANS_RAM);
 
-        listAddNodeTail(c->reply,o);
+        listAddNodeTail(c->reply,o,PM_TRANS_RAM);
         c->reply_bytes += zmalloc_size_sds(o->ptr);
     } else {
         tail = listNodeValue(listLast(c->reply));
@@ -262,9 +262,9 @@ void _addReplyStringToList(redisClient *c, char *s, size_t len) {
             tail->ptr = sdscatlen(tail->ptr,s,len);
             c->reply_bytes += zmalloc_size_sds(tail->ptr);
         } else {
-            robj *o = createStringObject(s,len);
+            robj *o = createStringObject(s,len,PM_TRANS_RAM);
 
-            listAddNodeTail(c->reply,o);
+            listAddNodeTail(c->reply,o,PM_TRANS_RAM);
             c->reply_bytes += zmalloc_size_sds(o->ptr);
         }
     }
@@ -303,10 +303,10 @@ void addReply(redisClient *c, robj *obj) {
             /* else... continue with the normal code path, but should never
              * happen actually since we verified there is room. */
         }
-        obj = getDecodedObject(obj);
+        obj = getDecodedObject(obj, PM_TRANS_RAM);
         if (_addReplyToBuffer(c,obj->ptr,sdslen(obj->ptr)) != REDIS_OK)
             _addReplyObjectToList(c,obj);
-        decrRefCount(obj);
+        decrRefCount(obj, PM_TRANS_RAM);
     } else {
         redisPanic("Wrong obj->encoding in addReply()");
     }
@@ -315,11 +315,11 @@ void addReply(redisClient *c, robj *obj) {
 void addReplySds(redisClient *c, sds s) {
     if (prepareClientToWrite(c) != REDIS_OK) {
         /* The caller expects the sds to be free'd. */
-        sdsfree(s);
+        sdsfree(s, PM_TRANS_RAM);
         return;
     }
     if (_addReplyToBuffer(c,s,sdslen(s)) == REDIS_OK) {
-        sdsfree(s);
+        sdsfree(s, PM_TRANS_RAM);
     } else {
         /* This method free's the sds when it is no longer needed. */
         _addReplySdsToList(c,s);
@@ -346,7 +346,7 @@ void addReplyErrorFormat(redisClient *c, const char *fmt, ...) {
     size_t l, j;
     va_list ap;
     va_start(ap,fmt);
-    sds s = sdscatvprintf(sdsempty(),fmt,ap);
+    sds s = sdscatvprintf(sdsempty(PM_TRANS_RAM),fmt,ap);
     va_end(ap);
     /* Make sure there are no newlines in the string, otherwise invalid protocol
      * is emitted. */
@@ -355,7 +355,7 @@ void addReplyErrorFormat(redisClient *c, const char *fmt, ...) {
         if (s[j] == '\r' || s[j] == '\n') s[j] = ' ';
     }
     addReplyErrorLength(c,s,sdslen(s));
-    sdsfree(s);
+    sdsfree(s, PM_TRANS_RAM);
 }
 
 void addReplyStatusLength(redisClient *c, char *s, size_t len) {
@@ -371,10 +371,10 @@ void addReplyStatus(redisClient *c, char *status) {
 void addReplyStatusFormat(redisClient *c, const char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
-    sds s = sdscatvprintf(sdsempty(),fmt,ap);
+    sds s = sdscatvprintf(sdsempty(PM_TRANS_RAM),fmt,ap);
     va_end(ap);
     addReplyStatusLength(c,s,sdslen(s));
-    sdsfree(s);
+    sdsfree(s, PM_TRANS_RAM);
 }
 
 /* Adds an empty object to the reply list that will contain the multi bulk
@@ -384,7 +384,7 @@ void *addDeferredMultiBulkLength(redisClient *c) {
      * ready to be sent, since we are sure that before returning to the
      * event loop setDeferredMultiBulkLength() will be called. */
     if (prepareClientToWrite(c) != REDIS_OK) return NULL;
-    listAddNodeTail(c->reply,createObject(REDIS_STRING,NULL));
+    listAddNodeTail(c->reply,createObject(REDIS_STRING,NULL,PM_TRANS_RAM),PM_TRANS_RAM);
     return listLast(c->reply);
 }
 
@@ -397,7 +397,7 @@ void setDeferredMultiBulkLength(redisClient *c, void *node, long length) {
     if (node == NULL) return;
 
     len = listNodeValue(ln);
-    len->ptr = sdscatprintf(sdsempty(),"*%ld\r\n",length);
+    len->ptr = sdscatprintf(sdsempty(PM_TRANS_RAM),"*%ld\r\n",length);
     c->reply_bytes += zmalloc_size_sds(len->ptr);
     if (ln->next != NULL) {
         next = listNodeValue(ln->next);
@@ -408,7 +408,7 @@ void setDeferredMultiBulkLength(redisClient *c, void *node, long length) {
             c->reply_bytes -= zmalloc_size_sds(next->ptr);
             len->ptr = sdscatlen(len->ptr,next->ptr,sdslen(next->ptr));
             c->reply_bytes += zmalloc_size_sds(len->ptr);
-            listDelNode(c->reply,ln->next);
+            listDelNode(c->reply,ln->next,PM_TRANS_RAM);
         }
     }
     asyncCloseClientOnOutputBufferLimitReached(c);
@@ -531,8 +531,8 @@ void addReplyBulkLongLong(redisClient *c, long long ll) {
  * The function takes care of freeing the old output buffers of the
  * destination client. */
 void copyClientOutputBuffer(redisClient *dst, redisClient *src) {
-    listRelease(dst->reply);
-    dst->reply = listDup(src->reply);
+    listRelease(dst->reply, PM_TRANS_RAM);
+    dst->reply = listDup(src->reply, PM_TRANS_RAM);
     memcpy(dst->buf,src->buf,src->bufpos);
     dst->bufpos = src->bufpos;
     dst->reply_bytes = src->reply_bytes;
@@ -609,7 +609,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 static void freeClientArgv(redisClient *c) {
     int j;
     for (j = 0; j < c->argc; j++)
-        decrRefCount(c->argv[j]);
+        decrRefCount(c->argv[j], PM_TRANS_RAM);
     c->argc = 0;
     c->cmd = NULL;
 }
@@ -654,7 +654,7 @@ void freeClient(redisClient *c) {
     }
 
     /* Free the query buffer */
-    sdsfree(c->querybuf);
+    sdsfree(c->querybuf, PM_TRANS_RAM);
     c->querybuf = NULL;
 
     /* Deallocate structures used to block on blocking ops. */
@@ -664,13 +664,13 @@ void freeClient(redisClient *c) {
 
     /* UNWATCH all the keys */
     unwatchAllKeys(c);
-    listRelease(c->watched_keys);
+    listRelease(c->watched_keys, PM_TRANS_RAM);
 
     /* Unsubscribe from all the pubsub channels */
     pubsubUnsubscribeAllChannels(c,0);
     pubsubUnsubscribeAllPatterns(c,0);
     dictRelease(c->pubsub_channels);
-    listRelease(c->pubsub_patterns);
+    listRelease(c->pubsub_patterns, PM_TRANS_RAM);
 
     /* Close socket, unregister events, and remove list of replies and
      * accumulated arguments. */
@@ -679,14 +679,14 @@ void freeClient(redisClient *c) {
         aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
         close(c->fd);
     }
-    listRelease(c->reply);
+    listRelease(c->reply, PM_TRANS_RAM);
     freeClientArgv(c);
 
     /* Remove from the list of clients */
     if (c->fd != -1) {
         ln = listSearchKey(server.clients,c);
         redisAssert(ln != NULL);
-        listDelNode(server.clients,ln);
+        listDelNode(server.clients,ln,PM_TRANS_RAM);
     }
 
     /* When client was just unblocked because of a blocking operation,
@@ -694,7 +694,7 @@ void freeClient(redisClient *c) {
     if (c->flags & REDIS_UNBLOCKED) {
         ln = listSearchKey(server.unblocked_clients,c);
         redisAssert(ln != NULL);
-        listDelNode(server.unblocked_clients,ln);
+        listDelNode(server.unblocked_clients,ln,PM_TRANS_RAM);
     }
 
     /* Master/slave cleanup Case 1:
@@ -702,12 +702,12 @@ void freeClient(redisClient *c) {
     if (c->flags & REDIS_SLAVE) {
         if (c->replstate == REDIS_REPL_SEND_BULK) {
             if (c->repldbfd != -1) close(c->repldbfd);
-            if (c->replpreamble) sdsfree(c->replpreamble);
+            if (c->replpreamble) sdsfree(c->replpreamble,PM_TRANS_RAM);
         }
         list *l = (c->flags & REDIS_MONITOR) ? server.monitors : server.slaves;
         ln = listSearchKey(l,c);
         redisAssert(ln != NULL);
-        listDelNode(l,ln);
+        listDelNode(l,ln,PM_TRANS_RAM);
         /* We need to remember the time when we started to have zero
          * attached slaves, as after some time we'll free the replication
          * backlog. */
@@ -725,15 +725,15 @@ void freeClient(redisClient *c) {
     if (c->flags & REDIS_CLOSE_ASAP) {
         ln = listSearchKey(server.clients_to_close,c);
         redisAssert(ln != NULL);
-        listDelNode(server.clients_to_close,ln);
+        listDelNode(server.clients_to_close,ln,PM_TRANS_RAM);
     }
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
-    if (c->name) decrRefCount(c->name);
+    if (c->name) decrRefCount(c->name, PM_TRANS_RAM);
     zfree(c->argv);
     freeClientMultiState(c);
-    sdsfree(c->peerid);
+    sdsfree(c->peerid,PM_TRANS_RAM);
     zfree(c);
 }
 
@@ -744,7 +744,7 @@ void freeClient(redisClient *c) {
 void freeClientAsync(redisClient *c) {
     if (c->flags & REDIS_CLOSE_ASAP || c->flags & REDIS_LUA_CLIENT) return;
     c->flags |= REDIS_CLOSE_ASAP;
-    listAddNodeTail(server.clients_to_close,c);
+    listAddNodeTail(server.clients_to_close,c,PM_TRANS_RAM);
 }
 
 void freeClientsInAsyncFreeQueue(void) {
@@ -754,7 +754,7 @@ void freeClientsInAsyncFreeQueue(void) {
 
         c->flags &= ~REDIS_CLOSE_ASAP;
         freeClient(c);
-        listDelNode(server.clients_to_close,ln);
+        listDelNode(server.clients_to_close,ln,PM_TRANS_RAM);
     }
 }
 
@@ -785,7 +785,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             objmem = zmalloc_size_sds(o->ptr);
 
             if (objlen == 0) {
-                listDelNode(c->reply,listFirst(c->reply));
+                listDelNode(c->reply,listFirst(c->reply),PM_TRANS_RAM);
                 continue;
             }
 
@@ -796,7 +796,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 
             /* If we fully sent the object on head go to the next one */
             if (c->sentlen == objlen) {
-                listDelNode(c->reply,listFirst(c->reply));
+                listDelNode(c->reply,listFirst(c->reply),PM_TRANS_RAM);
                 c->sentlen = 0;
                 c->reply_bytes -= objmem;
             }
@@ -874,9 +874,9 @@ int processInlineBuffer(redisClient *c) {
 
     /* Split the input buffer up to the \r\n */
     querylen = newline-(c->querybuf);
-    aux = sdsnewlen(c->querybuf,querylen);
+    aux = sdsnewlen(c->querybuf,querylen, PM_TRANS_RAM);
     argv = sdssplitargs(aux,&argc);
-    sdsfree(aux);
+    sdsfree(aux, PM_TRANS_RAM);
     if (argv == NULL) {
         addReplyError(c,"Protocol error: unbalanced quotes in request");
         setProtocolError(c,0);
@@ -901,10 +901,10 @@ int processInlineBuffer(redisClient *c) {
     /* Create redis objects for all arguments. */
     for (c->argc = 0, j = 0; j < argc; j++) {
         if (sdslen(argv[j])) {
-            c->argv[c->argc] = createObject(REDIS_STRING,argv[j]);
+            c->argv[c->argc] = createObject(REDIS_STRING,argv[j],PM_TRANS_RAM);
             c->argc++;
         } else {
-            sdsfree(argv[j]);
+            sdsfree(argv[j], PM_TRANS_RAM);
         }
     }
     zfree(argv);
@@ -915,10 +915,10 @@ int processInlineBuffer(redisClient *c) {
  * multi bulk requests idempotent. */
 static void setProtocolError(redisClient *c, int pos) {
     if (server.verbosity <= REDIS_VERBOSE) {
-        sds client = catClientInfoString(sdsempty(),c);
+        sds client = catClientInfoString(sdsempty(PM_TRANS_RAM),c);
         redisLog(REDIS_VERBOSE,
             "Protocol error from client: %s", client);
-        sdsfree(client);
+        sdsfree(client, PM_TRANS_RAM);
     }
     c->flags |= REDIS_CLOSE_AFTER_REPLY;
     sdsrange(c->querybuf,pos,-1);
@@ -1035,16 +1035,16 @@ int processMultibulkBuffer(redisClient *c) {
                 c->bulklen >= REDIS_MBULK_BIG_ARG &&
                 (signed) sdslen(c->querybuf) == c->bulklen+2)
             {
-                c->argv[c->argc++] = createObject(REDIS_STRING,c->querybuf);
+                c->argv[c->argc++] = createObject(REDIS_STRING,c->querybuf,PM_TRANS_RAM);
                 sdsIncrLen(c->querybuf,-2); /* remove CRLF */
-                c->querybuf = sdsempty();
+                c->querybuf = sdsempty(PM_TRANS_RAM);
                 /* Assume that if we saw a fat argument we'll see another one
                  * likely... */
                 c->querybuf = sdsMakeRoomFor(c->querybuf,c->bulklen+2);
                 pos = 0;
             } else {
                 c->argv[c->argc++] =
-                    createStringObject(c->querybuf+pos,c->bulklen);
+                    createStringObject(c->querybuf+pos,c->bulklen,PM_TRANS_RAM);
                 pos += c->bulklen+2;
             }
             c->bulklen = -1;
@@ -1151,12 +1151,12 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         return;
     }
     if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
-        sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
+        sds ci = catClientInfoString(sdsempty(PM_TRANS_RAM),c), bytes = sdsempty(PM_TRANS_RAM);
 
         bytes = sdscatrepr(bytes,c->querybuf,64);
         redisLog(REDIS_WARNING,"Closing client that reached max query buffer length: %s (qbuf initial bytes: %s)", ci, bytes);
-        sdsfree(ci);
-        sdsfree(bytes);
+        sdsfree(ci, PM_TRANS_RAM);
+        sdsfree(bytes, PM_TRANS_RAM);
         freeClient(c);
         return;
     }
@@ -1231,7 +1231,7 @@ char *getClientPeerId(redisClient *c) {
 
     if (c->peerid == NULL) {
         genClientPeerId(c,peerid,sizeof(peerid));
-        c->peerid = sdsnew(peerid);
+        c->peerid = sdsnew(peerid,PM_TRANS_RAM);
     }
     return c->peerid;
 }
@@ -1269,6 +1269,9 @@ sds catClientInfoString(sds s, redisClient *client) {
         "id=%U addr=%s fd=%i name=%s age=%I idle=%I flags=%s db=%i sub=%i psub=%i multi=%i qbuf=%U qbuf-free=%U obl=%U oll=%U omem=%U events=%s cmd=%s",
         (unsigned long long) client->id,
         getClientPeerId(client),
+/*    return sdscatprintf(sdsempty(PM_TRANS_RAM),
+        "addr=%s fd=%d name=%s age=%ld idle=%ld flags=%s db=%d sub=%d psub=%d multi=%d qbuf=%lu qbuf-free=%lu obl=%lu oll=%lu omem=%lu events=%s cmd=%s",
+        peerid,*/
         client->fd,
         client->name ? (char*)client->name->ptr : "",
         (long long)(server.unixtime - client->ctime),
@@ -1291,7 +1294,7 @@ sds getAllClientsInfoString(void) {
     listNode *ln;
     listIter li;
     redisClient *client;
-    sds o = sdsempty();
+    sds o = sdsempty(PM_TRANS_RAM);
 
     o = sdsMakeRoomFor(o,200*listLength(server.clients));
     listRewind(server.clients,&li);
@@ -1312,7 +1315,7 @@ void clientCommand(redisClient *c) {
         /* CLIENT LIST */
         sds o = getAllClientsInfoString();
         addReplyBulkCBuffer(c,o,sdslen(o));
-        sdsfree(o);
+        sdsfree(o,PM_TRANS_RAM);
     } else if (!strcasecmp(c->argv[1]->ptr,"kill")) {
         /* CLIENT KILL <ip:port>
          * CLIENT KILL <option> [value] ... <option> [value] */
@@ -1408,7 +1411,7 @@ void clientCommand(redisClient *c) {
         /* Setting the client name to an empty string actually removes
          * the current name. */
         if (len == 0) {
-            if (c->name) decrRefCount(c->name);
+            if (c->name) decrRefCount(c->name,PM_TRANS_RAM);
             c->name = NULL;
             addReply(c,shared.ok);
             return;
@@ -1425,9 +1428,9 @@ void clientCommand(redisClient *c) {
                 return;
             }
         }
-        if (c->name) decrRefCount(c->name);
+        if (c->name) decrRefCount(c->name,PM_TRANS_RAM);
         c->name = c->argv[2];
-        incrRefCount(c->name);
+        incrRefCount(c->name,PM_TRANS_RAM);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"getname") && c->argc == 2) {
         if (c->name)
@@ -1454,12 +1457,12 @@ void rewriteClientCommandVector(redisClient *c, int argc, ...) {
 
         a = va_arg(ap, robj*);
         argv[j] = a;
-        incrRefCount(a);
+        incrRefCount(a, PM_TRANS_RAM);
     }
     /* We free the objects in the original vector at the end, so we are
      * sure that if the same objects are reused in the new vector the
      * refcount gets incremented before it gets decremented. */
-    for (j = 0; j < c->argc; j++) decrRefCount(c->argv[j]);
+    for (j = 0; j < c->argc; j++) decrRefCount(c->argv[j], PM_TRANS_RAM);
     zfree(c->argv);
     /* Replace argv and argc with our new versions. */
     c->argv = argv;
@@ -1477,8 +1480,8 @@ void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
     redisAssertWithInfo(c,NULL,i < c->argc);
     oldval = c->argv[i];
     c->argv[i] = newval;
-    incrRefCount(newval);
-    decrRefCount(oldval);
+    incrRefCount(newval, PM_TRANS_RAM);
+    decrRefCount(oldval, PM_TRANS_RAM);
 
     /* If this is the command name make sure to fix c->cmd. */
     if (i == 0) {
@@ -1589,11 +1592,11 @@ void asyncCloseClientOnOutputBufferLimitReached(redisClient *c) {
     redisAssert(c->reply_bytes < ULONG_MAX-(1024*64));
     if (c->reply_bytes == 0 || c->flags & REDIS_CLOSE_ASAP) return;
     if (checkClientOutputBufferLimits(c)) {
-        sds client = catClientInfoString(sdsempty(),c);
+        sds client = catClientInfoString(sdsempty(PM_TRANS_RAM),c);
 
         freeClientAsync(c);
         redisLog(REDIS_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", client);
-        sdsfree(client);
+        sdsfree(client, PM_TRANS_RAM);
     }
 }
 

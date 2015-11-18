@@ -83,7 +83,7 @@ void loadServerConfigFromString(char *config) {
     int linenum = 0, totlines, i;
     sds *lines;
 
-    lines = sdssplitlen(config,strlen(config),"\n",1,&totlines);
+    lines = sdssplitlen(config,strlen(config),"\n",1,&totlines, PM_TRANS_RAM);
 
     for (i = 0; i < totlines; i++) {
         sds *argv;
@@ -104,7 +104,7 @@ void loadServerConfigFromString(char *config) {
 
         /* Skip this line if the resulting command vector is empty. */
         if (argc == 0) {
-            sdsfreesplitres(argv,argc);
+            sdsfreesplitres(argv,argc, PM_TRANS_RAM);
             continue;
         }
         sdstolower(argv[0]);
@@ -183,7 +183,7 @@ void loadServerConfigFromString(char *config) {
                  * be able to abort just for this problem later... */
                 logfp = fopen(server.logfile,"a");
                 if (logfp == NULL) {
-                    err = sdscatprintf(sdsempty(),
+                    err = sdscatprintf(sdsempty(PM_TRANS_RAM),
                         "Can't open the log file: %s", strerror(errno));
                     goto loaderr;
                 }
@@ -248,7 +248,7 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0],"slaveof") && argc == 3) {
-            server.masterhost = sdsnew(argv[1]);
+            server.masterhost = sdsnew(argv[1], PM_TRANS_RAM);
             server.masterport = atoi(argv[2]);
             server.repl_state = REDIS_REPL_CONNECT;
         } else if (!strcasecmp(argv[0],"repl-ping-slave-period") && argc == 2) {
@@ -300,6 +300,25 @@ void loadServerConfigFromString(char *config) {
             if ((server.repl_slave_ro = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if ((!strcasecmp(argv[0],"rdb-mmap") || !strcasecmp(argv[0],"rdbmmap")) && argc == 2) {
+            if ((server.rdb_mmap = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"rdb-mmap-truncate") && argc == 2) {
+            if ((server.rdb_mmap_truncate = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"rdb-mmap-prealloc") && argc == 2) {
+            if ((server.rdb_mmap_prealloc = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"rdb-mmap-block-size") && argc == 2) {
+            long long size = memtoll(argv[1],NULL);
+            if (size <= 0) {
+                err = "repl-backlog-size must be 1 or greater.";
+                goto loaderr;
+            }
+            server.rdb_mmap_block_size = size;
         } else if (!strcasecmp(argv[0],"rdbcompression") && argc == 2) {
             if ((server.rdb_compression = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
@@ -320,6 +339,31 @@ void loadServerConfigFromString(char *config) {
             server.hz = atoi(argv[1]);
             if (server.hz < REDIS_MIN_HZ) server.hz = REDIS_MIN_HZ;
             if (server.hz > REDIS_MAX_HZ) server.hz = REDIS_MAX_HZ;
+        } else if (!strcasecmp(argv[0],"pmfile") && argc >= 3 && argc < 5) {
+            server.pm_file_path = zstrdup(argv[1]);
+            long long size = memtoll(argv[2],NULL);
+            if (size <= 0) {
+                err = "pmfile size must be 1 or greater.";
+                goto loaderr;
+            }
+            server.pm_file_size = size;
+
+
+        }  else if (!strcasecmp(argv[0],"pm_file_fault_injections") && argc == 2) {
+            server.pm_file_fault_injections = memtoll(argv[1],NULL);
+        } else if (!strcasecmp(argv[0],"pm_fast_memcpy") && argc == 2) {
+            if ((server.pm_fast_memcpy = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"pm_align_objsize") && argc == 2) {
+            if ((server.pm_align_objsize = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+         } else if (!strcasecmp(argv[0],"pm_memory_counter") && argc == 2) {
+			if ((server.pm_memory_counter = yesnotoi(argv[1])) == -1) {
+				err = "argument must be 'yes' or 'no'"; goto loaderr;
+			}
+
         } else if (!strcasecmp(argv[0],"appendonly") && argc == 2) {
             int yes;
 
@@ -334,6 +378,33 @@ void loadServerConfigFromString(char *config) {
             }
             zfree(server.aof_filename);
             server.aof_filename = zstrdup(argv[1]);
+        } else if ((!strcasecmp(argv[0],"aof-mmap") || !strcasecmp(argv[0],"aofmmap")) && argc == 2) {
+             if ((server.aof_mmap = yesnotoi(argv[1])) == -1) {
+                 err = "argument must be 'yes' or 'no'"; goto loaderr;
+             }
+        } else if (!strcasecmp(argv[0],"aof-mmap-direct") && argc == 2) {
+             if ((server.aof_mmap_direct = yesnotoi(argv[1])) == -1) {
+                 err = "argument must be 'yes' or 'no'"; goto loaderr;
+             }
+        } else if (!strcasecmp(argv[0],"aof-mmap-rewrite") && argc == 2) {
+             if ((server.aof_mmap_rewrite = yesnotoi(argv[1])) == -1) {
+                 err = "argument must be 'yes' or 'no'"; goto loaderr;
+             }
+        } else if (!strcasecmp(argv[0],"aof-mmap-block-size") && argc == 2) {
+             long long size = memtoll(argv[1],NULL);
+             if (size <= 0) {
+                 err = "repl-backlog-size must be 1 or greater.";
+                 goto loaderr;
+             }
+             server.aof_mmap_block_size = size;
+        } else if (!strcasecmp(argv[0],"aof-mmap-truncate") && argc == 2) {
+            if ((server.aof_mmap_truncate = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"aof-mmap-prealloc") && argc == 2) {
+            if ((server.aof_mmap_prealloc = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0],"no-appendfsync-on-rewrite")
                    && argc == 2) {
             if ((server.aof_no_fsync_on_rewrite= yesnotoi(argv[1])) == -1) {
@@ -421,11 +492,11 @@ void loadServerConfigFromString(char *config) {
 
             /* Otherwise we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {
-                sds copy = sdsdup(argv[2]);
+                sds copy = sdsdup(argv[2], PM_TRANS_RAM);
 
-                retval = dictAdd(server.commands, copy, cmd);
+                retval = dictAdd(server.commands, copy, cmd, PM_TRANS_RAM);
                 if (retval != DICT_OK) {
-                    sdsfree(copy);
+                    sdsfree(copy, PM_TRANS_RAM);
                     err = "Target command name already exists"; goto loaderr;
                 }
             }
@@ -505,9 +576,9 @@ void loadServerConfigFromString(char *config) {
         } else {
             err = "Bad directive or wrong number of arguments"; goto loaderr;
         }
-        sdsfreesplitres(argv,argc);
+        sdsfreesplitres(argv,argc, PM_TRANS_RAM);
     }
-    sdsfreesplitres(lines,totlines);
+    sdsfreesplitres(lines,totlines, PM_TRANS_RAM);
     return;
 
 loaderr:
@@ -526,7 +597,7 @@ loaderr:
  * empty. This way loadServerConfig can be used to just load a file or
  * just load a string. */
 void loadServerConfig(char *filename, char *options) {
-    sds config = sdsempty();
+    sds config = sdsempty(PM_TRANS_RAM);
     char buf[REDIS_CONFIGLINE_MAX+1];
 
     /* Load the file content */
@@ -552,7 +623,7 @@ void loadServerConfig(char *filename, char *options) {
         config = sdscat(config,options);
     }
     loadServerConfigFromString(config);
-    sdsfree(config);
+    sdsfree(config,PM_TRANS_RAM);
 }
 
 /*-----------------------------------------------------------------------------
@@ -573,6 +644,21 @@ void configSetCommand(redisClient *c) {
         }
         zfree(server.rdb_filename);
         server.rdb_filename = zstrdup(o->ptr);
+    } else if (!strcasecmp(c->argv[2]->ptr,"rdb-mmap")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.rdb_mmap = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"rdb-mmap-truncate")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.rdb_mmap_truncate = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"rdb-mmap-prealloc")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.rdb_mmap_prealloc = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"rdb-mmap-block-size")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.rdb_mmap_block_size = ll;
     } else if (!strcasecmp(c->argv[2]->ptr,"requirepass")) {
         if (sdslen(o->ptr) > REDIS_AUTHPASS_MAX_LEN) goto badfmt;
         zfree(server.requirepass);
@@ -649,6 +735,17 @@ void configSetCommand(redisClient *c) {
         if (getLongLongFromObject(o,&ll) == REDIS_ERR ||
             ll < 0 || ll > INT_MAX) goto badfmt;
         server.tcpkeepalive = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"pm_fast_memcpy")) {
+        int yn = yesnotoi(o->ptr);
+
+        if (yn == -1) goto badfmt;
+        server.pm_fast_memcpy = yn;
+    }  else if (!strcasecmp(c->argv[2]->ptr,"pm_align_objsize")) {
+        int yn = yesnotoi(o->ptr);
+
+        if (yn == -1) goto badfmt;
+        server.pm_align_objsize = yn;
+        server.sds_alignment = server.pm_align_objsize ? 64 : 0;
     } else if (!strcasecmp(c->argv[2]->ptr,"appendfsync")) {
         if (!strcasecmp(o->ptr,"no")) {
             server.aof_fsync = AOF_FSYNC_NO;
@@ -693,15 +790,41 @@ void configSetCommand(redisClient *c) {
 
         if (yn == -1) goto badfmt;
         server.aof_load_truncated = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"aof-mmap")) {
+        int yn = yesnotoi(o->ptr);
+
+        if (yn == -1) goto badfmt;
+        server.aof_mmap = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"aof-mmap-direct")) {
+        int yn = yesnotoi(o->ptr);
+
+        if (yn == -1) goto badfmt;
+        server.aof_mmap_direct = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"aof-mmap-rewrite")) {
+        int yn = yesnotoi(o->ptr);
+
+        if (yn == -1) goto badfmt;
+        server.aof_mmap_rewrite = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"aof-mmap-block-size")) {
+        if (getLongLongFromObject(o,&ll) == REDIS_ERR || ll < 0) goto badfmt;
+        server.aof_mmap_block_size = ll;
+    } else if (!strcasecmp(c->argv[2]->ptr,"aof-mmap-truncate")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.aof_mmap_truncate = yn;
+    } else if (!strcasecmp(c->argv[2]->ptr,"aof-mmap-prealloc")) {
+        int yn = yesnotoi(o->ptr);
+        if (yn == -1) goto badfmt;
+        server.aof_mmap_prealloc = yn;
     } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
         int vlen, j;
-        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen, PM_TRANS_RAM);
 
         /* Perform sanity check before setting the new config:
          * - Even number of args
          * - Seconds >= 1, changes >= 0 */
         if (vlen & 1) {
-            sdsfreesplitres(v,vlen);
+            sdsfreesplitres(v,vlen, PM_TRANS_RAM);
             goto badfmt;
         }
         for (j = 0; j < vlen; j++) {
@@ -712,7 +835,7 @@ void configSetCommand(redisClient *c) {
             if (eptr[0] != '\0' ||
                 ((j & 1) == 0 && val < 1) ||
                 ((j & 1) == 1 && val < 0)) {
-                sdsfreesplitres(v,vlen);
+                sdsfreesplitres(v,vlen, PM_TRANS_RAM);
                 goto badfmt;
             }
         }
@@ -726,7 +849,7 @@ void configSetCommand(redisClient *c) {
             changes = strtoll(v[j+1],NULL,10);
             appendServerSaveParams(seconds, changes);
         }
-        sdsfreesplitres(v,vlen);
+        sdsfreesplitres(v,vlen,PM_TRANS_RAM);
     } else if (!strcasecmp(c->argv[2]->ptr,"slave-serve-stale-data")) {
         int yn = yesnotoi(o->ptr);
 
@@ -797,11 +920,11 @@ void configSetCommand(redisClient *c) {
         }
     } else if (!strcasecmp(c->argv[2]->ptr,"client-output-buffer-limit")) {
         int vlen, j;
-        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen,PM_TRANS_RAM);
 
         /* We need a multiple of 4: <class> <hard> <soft> <soft_seconds> */
         if (vlen % 4) {
-            sdsfreesplitres(v,vlen);
+            sdsfreesplitres(v,vlen, PM_TRANS_RAM);
             goto badfmt;
         }
 
@@ -814,13 +937,13 @@ void configSetCommand(redisClient *c) {
 
             if ((j % 4) == 0) {
                 if (getClientTypeByName(v[j]) == -1) {
-                    sdsfreesplitres(v,vlen);
+                    sdsfreesplitres(v,vlen, PM_TRANS_RAM);
                     goto badfmt;
                 }
             } else {
                 val = strtoll(v[j], &eptr, 10);
                 if (eptr[0] != '\0' || val < 0) {
-                    sdsfreesplitres(v,vlen);
+                    sdsfreesplitres(v,vlen, PM_TRANS_RAM);
                     goto badfmt;
                 }
             }
@@ -840,7 +963,7 @@ void configSetCommand(redisClient *c) {
             server.client_obuf_limits[class].soft_limit_bytes = soft;
             server.client_obuf_limits[class].soft_limit_seconds = soft_seconds;
         }
-        sdsfreesplitres(v,vlen);
+        sdsfreesplitres(v,vlen,PM_TRANS_RAM);
     } else if (!strcasecmp(c->argv[2]->ptr,"stop-writes-on-bgsave-error")) {
         int yn = yesnotoi(o->ptr);
 
@@ -1007,6 +1130,8 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("min-slaves-max-lag",server.repl_min_slaves_max_lag);
     config_get_numerical_field("hz",server.hz);
     config_get_numerical_field("repl-diskless-sync-delay",server.repl_diskless_sync_delay);
+    config_get_numerical_field("rdb-mmap-block-size",server.rdb_mmap_block_size);
+    config_get_numerical_field("aof-mmap-block-size",server.aof_mmap_block_size);
 
     /* Bool (yes/no) values */
     config_get_bool_field("no-appendfsync-on-rewrite",
@@ -1029,6 +1154,18 @@ void configGetCommand(redisClient *c) {
             server.aof_rewrite_incremental_fsync);
     config_get_bool_field("aof-load-truncated",
             server.aof_load_truncated);
+    config_get_bool_field("rdb-mmap", server.rdb_mmap);
+    config_get_bool_field("rdb-mmap-truncate", server.rdb_mmap_truncate);
+    config_get_bool_field("rdb-mmap-prealloc", server.rdb_mmap_prealloc);
+
+    config_get_bool_field("aof-mmap", server.aof_mmap);
+    config_get_bool_field("aof-mmap-direct", server.aof_mmap_direct);
+    config_get_bool_field("aof-mmap-rewrite", server.aof_mmap_rewrite);
+    config_get_bool_field("aof-mmap-truncate", server.aof_mmap_truncate);
+    config_get_bool_field("aof-mmap-prealloc", server.aof_mmap_prealloc);
+
+    config_get_bool_field("pm_fast_memcpy", server.pm_fast_memcpy);
+    config_get_bool_field("pm_align_objsize", server.pm_align_objsize);
 
     /* Everything we can't handle with macros follows. */
 
@@ -1077,7 +1214,7 @@ void configGetCommand(redisClient *c) {
         matches++;
     }
     if (stringmatch(pattern,"save",0)) {
-        sds buf = sdsempty();
+        sds buf = sdsempty(PM_TRANS_RAM);
         int j;
 
         for (j = 0; j < server.saveparamslen; j++) {
@@ -1089,7 +1226,7 @@ void configGetCommand(redisClient *c) {
         }
         addReplyBulkCString(c,"save");
         addReplyBulkCString(c,buf);
-        sdsfree(buf);
+        sdsfree(buf,PM_TRANS_RAM);
         matches++;
     }
     if (stringmatch(pattern,"loglevel",0)) {
@@ -1107,7 +1244,7 @@ void configGetCommand(redisClient *c) {
         matches++;
     }
     if (stringmatch(pattern,"client-output-buffer-limit",0)) {
-        sds buf = sdsempty();
+        sds buf = sdsempty(PM_TRANS_RAM);
         int j;
 
         for (j = 0; j < REDIS_CLIENT_TYPE_COUNT; j++) {
@@ -1121,7 +1258,7 @@ void configGetCommand(redisClient *c) {
         }
         addReplyBulkCString(c,"client-output-buffer-limit");
         addReplyBulkCString(c,buf);
-        sdsfree(buf);
+        sdsfree(buf,PM_TRANS_RAM);
         matches++;
     }
     if (stringmatch(pattern,"unixsocketperm",0)) {
@@ -1145,11 +1282,11 @@ void configGetCommand(redisClient *c) {
     }
     if (stringmatch(pattern,"notify-keyspace-events",0)) {
         robj *flagsobj = createObject(REDIS_STRING,
-            keyspaceEventsFlagsToString(server.notify_keyspace_events));
+            keyspaceEventsFlagsToString(server.notify_keyspace_events), PM_TRANS_RAM);
 
         addReplyBulkCString(c,"notify-keyspace-events");
         addReplyBulk(c,flagsobj);
-        decrRefCount(flagsobj);
+        decrRefCount(flagsobj,PM_TRANS_RAM);
         matches++;
     }
     if (stringmatch(pattern,"bind",0)) {
@@ -1157,7 +1294,7 @@ void configGetCommand(redisClient *c) {
 
         addReplyBulkCString(c,"bind");
         addReplyBulkCString(c,aux);
-        sdsfree(aux);
+        sdsfree(aux,PM_TRANS_RAM);
         matches++;
     }
     setDeferredMultiBulkLength(c,replylen,matches*2);
@@ -1174,8 +1311,8 @@ void configGetCommand(redisClient *c) {
  * like "maxmemory" -> list of line numbers (first line is zero). */
 unsigned int dictSdsCaseHash(const void *key);
 int dictSdsKeyCaseCompare(void *privdata, const void *key1, const void *key2);
-void dictSdsDestructor(void *privdata, void *val);
-void dictListDestructor(void *privdata, void *val);
+void dictSdsDestructor(void *privdata, void *val, PM_TRANS trans);
+void dictListDestructor(void *privdata, void *val, PM_TRANS trans);
 
 /* Sentinel config rewriting is implemented inside sentinel.c by
  * rewriteConfigSentinelOption(). */
@@ -1220,10 +1357,10 @@ void rewriteConfigAddLineNumberToOption(struct rewriteConfigState *state, sds op
     list *l = dictFetchValue(state->option_to_line,option);
 
     if (l == NULL) {
-        l = listCreate();
-        dictAdd(state->option_to_line,sdsdup(option),l);
+        l = listCreate(PM_TRANS_RAM);
+        dictAdd(state->option_to_line,sdsdup(option, PM_TRANS_RAM),l, PM_TRANS_RAM);
     }
-    listAddNodeTail(l,(void*)(long)linenum);
+    listAddNodeTail(l,(void*)(long)linenum, PM_TRANS_RAM);
 }
 
 /* Add the specified option to the set of processed options.
@@ -1231,9 +1368,9 @@ void rewriteConfigAddLineNumberToOption(struct rewriteConfigState *state, sds op
  * in the config file, while options the rewrite process does not understand
  * remain untouched. */
 void rewriteConfigMarkAsProcessed(struct rewriteConfigState *state, char *option) {
-    sds opt = sdsnew(option);
+    sds opt = sdsnew(option,PM_TRANS_RAM);
 
-    if (dictAdd(state->rewritten,opt,NULL) != DICT_OK) sdsfree(opt);
+    if (dictAdd(state->rewritten,opt,NULL, PM_TRANS_RAM) != DICT_OK) sdsfree(opt, PM_TRANS_RAM);
 }
 
 /* Read the old file, split it into lines to populate a newly created
@@ -1260,7 +1397,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
     while(fgets(buf,REDIS_CONFIGLINE_MAX+1,fp) != NULL) {
         int argc;
         sds *argv;
-        sds line = sdstrim(sdsnew(buf),"\r\n\t ");
+        sds line = sdstrim(sdsnew(buf,PM_TRANS_RAM),"\r\n\t ");
 
         linenum++; /* Zero based, so we init at -1 */
 
@@ -1278,9 +1415,9 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
             /* Apparently the line is unparsable for some reason, for
              * instance it may have unbalanced quotes. Load it as a
              * comment. */
-            sds aux = sdsnew("# ??? ");
+            sds aux = sdsnew("# ??? ", PM_TRANS_RAM);
             aux = sdscatsds(aux,line);
-            sdsfree(line);
+            sdsfree(line,PM_TRANS_RAM);
             rewriteConfigAppendLine(state,aux);
             continue;
         }
@@ -1292,7 +1429,7 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
         rewriteConfigAppendLine(state,line);
         rewriteConfigAddLineNumberToOption(state,argv[0],linenum);
 
-        sdsfreesplitres(argv,argc);
+        sdsfreesplitres(argv,argc, PM_TRANS_RAM);
     }
     fclose(fp);
     return state;
@@ -1315,15 +1452,15 @@ struct rewriteConfigState *rewriteConfigReadOldFile(char *path) {
  * "line" is either used, or freed, so the caller does not need to free it
  * in any way. */
 void rewriteConfigRewriteLine(struct rewriteConfigState *state, char *option, sds line, int force) {
-    sds o = sdsnew(option);
+    sds o = sdsnew(option, PM_TRANS_RAM);
     list *l = dictFetchValue(state->option_to_line,o);
 
     rewriteConfigMarkAsProcessed(state,option);
 
     if (!l && !force) {
         /* Option not used previously, and we are not forced to use it. */
-        sdsfree(line);
-        sdsfree(o);
+        sdsfree(line, PM_TRANS_RAM);
+        sdsfree(o, PM_TRANS_RAM);
         return;
     }
 
@@ -1333,20 +1470,20 @@ void rewriteConfigRewriteLine(struct rewriteConfigState *state, char *option, sd
 
         /* There are still lines in the old configuration file we can reuse
          * for this option. Replace the line with the new one. */
-        listDelNode(l,ln);
+        listDelNode(l,ln, PM_TRANS_RAM);
         if (listLength(l) == 0) dictDelete(state->option_to_line,o);
-        sdsfree(state->lines[linenum]);
+        sdsfree(state->lines[linenum], PM_TRANS_RAM);
         state->lines[linenum] = line;
     } else {
         /* Append a new line. */
         if (!state->has_tail) {
             rewriteConfigAppendLine(state,
-                sdsnew(REDIS_CONFIG_REWRITE_SIGNATURE));
+                sdsnew(REDIS_CONFIG_REWRITE_SIGNATURE, PM_TRANS_RAM));
             state->has_tail = 1;
         }
         rewriteConfigAppendLine(state,line);
     }
-    sdsfree(o);
+    sdsfree(o,PM_TRANS_RAM);
 }
 
 /* Write the long long 'bytes' value as a string in a way that is parsable
@@ -1374,14 +1511,14 @@ void rewriteConfigBytesOption(struct rewriteConfigState *state, char *option, lo
     sds line;
 
     rewriteConfigFormatMemory(buf,sizeof(buf),value);
-    line = sdscatprintf(sdsempty(),"%s %s",option,buf);
+    line = sdscatprintf(sdsempty(PM_TRANS_RAM),"%s %s",option,buf);
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
 /* Rewrite a yes/no option. */
 void rewriteConfigYesNoOption(struct rewriteConfigState *state, char *option, int value, int defvalue) {
     int force = value != defvalue;
-    sds line = sdscatprintf(sdsempty(),"%s %s",option,
+    sds line = sdscatprintf(sdsempty(PM_TRANS_RAM),"%s %s",option,
         value ? "yes" : "no");
 
     rewriteConfigRewriteLine(state,option,line,force);
@@ -1402,7 +1539,7 @@ void rewriteConfigStringOption(struct rewriteConfigState *state, char *option, c
     /* Set force to zero if the value is set to its default. */
     if (defvalue && strcmp(value,defvalue) == 0) force = 0;
 
-    line = sdsnew(option);
+    line = sdsnew(option,PM_TRANS_RAM);
     line = sdscatlen(line, " ", 1);
     line = sdscatrepr(line, value, strlen(value));
 
@@ -1412,7 +1549,7 @@ void rewriteConfigStringOption(struct rewriteConfigState *state, char *option, c
 /* Rewrite a numerical (long long range) option. */
 void rewriteConfigNumericalOption(struct rewriteConfigState *state, char *option, long long value, long long defvalue) {
     int force = value != defvalue;
-    sds line = sdscatprintf(sdsempty(),"%s %lld",option,value);
+    sds line = sdscatprintf(sdsempty(PM_TRANS_RAM),"%s %lld",option,value);
 
     rewriteConfigRewriteLine(state,option,line,force);
 }
@@ -1420,7 +1557,7 @@ void rewriteConfigNumericalOption(struct rewriteConfigState *state, char *option
 /* Rewrite a octal option. */
 void rewriteConfigOctalOption(struct rewriteConfigState *state, char *option, int value, int defvalue) {
     int force = value != defvalue;
-    sds line = sdscatprintf(sdsempty(),"%s %o",option,value);
+    sds line = sdscatprintf(sdsempty(PM_TRANS_RAM),"%s %o",option,value);
 
     rewriteConfigRewriteLine(state,option,line,force);
 }
@@ -1447,7 +1584,7 @@ void rewriteConfigEnumOption(struct rewriteConfigState *state, char *option, int
     va_end(ap);
 
     force = value != def_val;
-    line = sdscatprintf(sdsempty(),"%s %s",option,matching_name);
+    line = sdscatprintf(sdsempty(PM_TRANS_RAM),"%s %s",option,matching_name);
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
@@ -1464,7 +1601,7 @@ void rewriteConfigSyslogfacilityOption(struct rewriteConfigState *state) {
             break;
         }
     }
-    line = sdscatprintf(sdsempty(),"%s %s",option,name);
+    line = sdscatprintf(sdsempty(PM_TRANS_RAM),"%s %s",option,name);
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
@@ -1477,7 +1614,7 @@ void rewriteConfigSaveOption(struct rewriteConfigState *state) {
      * config line with "save" will be detected as orphaned and deleted,
      * resulting into no RDB persistence as expected. */
     for (j = 0; j < server.saveparamslen; j++) {
-        line = sdscatprintf(sdsempty(),"save %ld %d",
+        line = sdscatprintf(sdsempty(PM_TRANS_RAM),"save %ld %d",
             (long) server.saveparams[j].seconds, server.saveparams[j].changes);
         rewriteConfigRewriteLine(state,"save",line,1);
     }
@@ -1507,7 +1644,7 @@ void rewriteConfigSlaveofOption(struct rewriteConfigState *state) {
         rewriteConfigMarkAsProcessed(state,"slaveof");
         return;
     }
-    line = sdscatprintf(sdsempty(),"%s %s %d", option,
+    line = sdscatprintf(sdsempty(PM_TRANS_RAM),"%s %s %d", option,
         server.masterhost, server.masterport);
     rewriteConfigRewriteLine(state,option,line,1);
 }
@@ -1519,10 +1656,10 @@ void rewriteConfigNotifykeyspaceeventsOption(struct rewriteConfigState *state) {
     sds line, flags;
 
     flags = keyspaceEventsFlagsToString(server.notify_keyspace_events);
-    line = sdsnew(option);
+    line = sdsnew(option,PM_TRANS_RAM);
     line = sdscatlen(line, " ", 1);
     line = sdscatrepr(line, flags, sdslen(flags));
-    sdsfree(flags);
+    sdsfree(flags,PM_TRANS_RAM);
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
@@ -1546,7 +1683,7 @@ void rewriteConfigClientoutputbufferlimitOption(struct rewriteConfigState *state
         rewriteConfigFormatMemory(soft,sizeof(soft),
                 server.client_obuf_limits[j].soft_limit_bytes);
 
-        line = sdscatprintf(sdsempty(),"%s %s %s %s %ld",
+        line = sdscatprintf(sdsempty(PM_TRANS_RAM),"%s %s %s %s %ld",
                 option, getClientTypeName(j), hard, soft,
                 (long) server.client_obuf_limits[j].soft_limit_seconds);
         rewriteConfigRewriteLine(state,option,line,force);
@@ -1567,10 +1704,10 @@ void rewriteConfigBindOption(struct rewriteConfigState *state) {
 
     /* Rewrite as bind <addr1> <addr2> ... <addrN> */
     addresses = sdsjoin(server.bindaddr,server.bindaddr_count," ");
-    line = sdsnew(option);
+    line = sdsnew(option,PM_TRANS_RAM);
     line = sdscatlen(line, " ", 1);
     line = sdscatsds(line, addresses);
-    sdsfree(addresses);
+    sdsfree(addresses,PM_TRANS_RAM);
 
     rewriteConfigRewriteLine(state,option,line,force);
 }
@@ -1578,7 +1715,7 @@ void rewriteConfigBindOption(struct rewriteConfigState *state) {
 /* Glue together the configuration lines in the current configuration
  * rewrite state into a single string, stripping multiple empty lines. */
 sds rewriteConfigGetContentFromState(struct rewriteConfigState *state) {
-    sds content = sdsempty();
+    sds content = sdsempty(PM_TRANS_RAM);
     int j, was_empty = 0;
 
     for (j = 0; j < state->numlines; j++) {
@@ -1597,7 +1734,7 @@ sds rewriteConfigGetContentFromState(struct rewriteConfigState *state) {
 
 /* Free the configuration rewrite state. */
 void rewriteConfigReleaseState(struct rewriteConfigState *state) {
-    sdsfreesplitres(state->lines,state->numlines);
+    sdsfreesplitres(state->lines,state->numlines,PM_TRANS_RAM);
     dictRelease(state->option_to_line);
     dictRelease(state->rewritten);
     zfree(state);
@@ -1630,9 +1767,9 @@ void rewriteConfigRemoveOrphaned(struct rewriteConfigState *state) {
             listNode *ln = listFirst(l);
             int linenum = (long) ln->value;
 
-            sdsfree(state->lines[linenum]);
-            state->lines[linenum] = sdsempty();
-            listDelNode(l,ln);
+            sdsfree(state->lines[linenum],PM_TRANS_RAM);
+            state->lines[linenum] = sdsempty(PM_TRANS_RAM);
+            listDelNode(l,ln,PM_TRANS_RAM);
         }
     }
     dictReleaseIterator(di);
@@ -1666,7 +1803,7 @@ int rewriteConfigOverwriteFile(char *configfile, sds content) {
     }
 
     /* 2) Pad the content at least match the old file size. */
-    content_padded = sdsdup(content);
+    content_padded = sdsdup(content,PM_TRANS_RAM);
     if (content_size < sb.st_size) {
         /* If the old file was bigger, pad the content with
          * a newline plus as many "#" chars as required. */
@@ -1690,7 +1827,7 @@ int rewriteConfigOverwriteFile(char *configfile, sds content) {
     }
 
 cleanup:
-    sdsfree(content_padded);
+    sdsfree(content_padded,PM_TRANS_RAM);
     close(fd);
     return retval;
 }
@@ -1739,6 +1876,10 @@ int rewriteConfig(char *path) {
     rewriteConfigYesNoOption(state,"rdbcompression",server.rdb_compression,REDIS_DEFAULT_RDB_COMPRESSION);
     rewriteConfigYesNoOption(state,"rdbchecksum",server.rdb_checksum,REDIS_DEFAULT_RDB_CHECKSUM);
     rewriteConfigStringOption(state,"dbfilename",server.rdb_filename,REDIS_DEFAULT_RDB_FILENAME);
+    rewriteConfigYesNoOption(state,"rdb-mmap",server.rdb_mmap,REDIS_DEFAULT_RDB_MMAP);
+    rewriteConfigYesNoOption(state,"rdb-mmap-truncate",server.rdb_mmap_truncate,REDIS_DEFAULT_RDB_MMAP_TRUNCATE);
+    rewriteConfigYesNoOption(state,"rdb-mmap-prealloc",server.rdb_mmap_prealloc,REDIS_DEFAULT_RDB_MMAP_PREALLOC);
+    rewriteConfigNumericalOption(state,"rdb-mmap-block-size",server.rdb_mmap_block_size,REDIS_DEFAULT_RDB_MMAP_BLOCK_SIZE);
     rewriteConfigDirOption(state);
     rewriteConfigSlaveofOption(state);
     rewriteConfigStringOption(state,"masterauth",server.masterauth,NULL);
@@ -1768,6 +1909,12 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"maxmemory-samples",server.maxmemory_samples,REDIS_DEFAULT_MAXMEMORY_SAMPLES);
     rewriteConfigYesNoOption(state,"appendonly",server.aof_state != REDIS_AOF_OFF,0);
     rewriteConfigStringOption(state,"appendfilename",server.aof_filename,REDIS_DEFAULT_AOF_FILENAME);
+    rewriteConfigYesNoOption(state,"aof-mmap",server.aof_mmap,REDIS_DEFAULT_AOF_MMAP);
+    rewriteConfigYesNoOption(state,"aof-mmap-truncate",server.aof_mmap_truncate,REDIS_DEFAULT_AOF_MMAP_TRUNCATE);
+    rewriteConfigYesNoOption(state,"aof-mmap-prealloc",server.aof_mmap_prealloc,REDIS_DEFAULT_AOF_MMAP_PREALLOC);
+    rewriteConfigYesNoOption(state,"aof-mmap-direct",server.aof_mmap_direct,REDIS_DEFAULT_AOF_MMAP);
+    rewriteConfigYesNoOption(state,"aof-mmap-rewrite",server.aof_mmap_rewrite,REDIS_DEFAULT_AOF_MMAP);
+    rewriteConfigNumericalOption(state,"aof-mmap-block-size",server.aof_mmap_block_size,REDIS_DEFAULT_AOF_MMAP_BLOCK_SIZE);
     rewriteConfigEnumOption(state,"appendfsync",server.aof_fsync,
         "everysec", AOF_FSYNC_EVERYSEC,
         "always", AOF_FSYNC_ALWAYS,
@@ -1794,6 +1941,10 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"hz",server.hz,REDIS_DEFAULT_HZ);
     rewriteConfigYesNoOption(state,"aof-rewrite-incremental-fsync",server.aof_rewrite_incremental_fsync,REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC);
     rewriteConfigYesNoOption(state,"aof-load-truncated",server.aof_load_truncated,REDIS_DEFAULT_AOF_LOAD_TRUNCATED);
+
+    rewriteConfigYesNoOption(state,"pm_fast_memcpy",server.pm_fast_memcpy,REDIS_DEFAULT_PM_FAST_MEMCPY);
+    rewriteConfigYesNoOption(state,"pm_align_objsize",server.pm_align_objsize,REDIS_DEFAULT_PM_ALIGN_OBJSIZE);
+
     if (server.sentinel_mode) rewriteConfigSentinelOption(state);
 
     /* Step 3: remove all the orphaned lines in the old file, that is, lines
@@ -1806,7 +1957,7 @@ int rewriteConfig(char *path) {
     newcontent = rewriteConfigGetContentFromState(state);
     retval = rewriteConfigOverwriteFile(server.configfile,newcontent);
 
-    sdsfree(newcontent);
+    sdsfree(newcontent,PM_TRANS_RAM);
     rewriteConfigReleaseState(state);
     return retval;
 }

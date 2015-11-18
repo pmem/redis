@@ -111,6 +111,7 @@
 #include "ziplist.h"
 #include "endianconv.h"
 #include "redisassert.h"
+//#include "pmem.h"
 
 #define ZIP_END 255
 #define ZIP_BIGLEN 254
@@ -415,21 +416,43 @@ static zlentry zipEntry(unsigned char *p) {
 }
 
 /* Create a new empty ziplist. */
-unsigned char *ziplistNew(void) {
+unsigned char *ziplistNew(PM_TRANS trans) {
     unsigned int bytes = ZIPLIST_HEADER_SIZE+1;
-    unsigned char *zl = zmalloc(bytes);
+    unsigned char *zl = NULL;
+    if(PM_TRANS_RAM!=trans)
+    {
+        zl = pm_trans_alloc(trans, bytes, PM_TAG_ALLOC_ZIPLIST,NULL);
+    }
+    else
+    {
+        zl = zmalloc(bytes);
+    }
     ZIPLIST_BYTES(zl) = intrev32ifbe(bytes);
     ZIPLIST_TAIL_OFFSET(zl) = intrev32ifbe(ZIPLIST_HEADER_SIZE);
     ZIPLIST_LENGTH(zl) = 0;
     zl[bytes-1] = ZIP_END;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,zl, bytes);
+    }
     return zl;
 }
 
 /* Resize the ziplist. */
-static unsigned char *ziplistResize(unsigned char *zl, unsigned int len) {
-    zl = zrealloc(zl,len);
-    ZIPLIST_BYTES(zl) = intrev32ifbe(len);
-    zl[len-1] = ZIP_END;
+static unsigned char *ziplistResize(unsigned char *zl, unsigned int len, PM_TRANS trans) {
+    if(PM_TRANS_RAM!=trans)
+    {
+        zl = pm_trans_realloc(trans, zl, len);
+        ZIPLIST_BYTES(zl) = intrev32ifbe(len);
+        zl[len-1] = ZIP_END;
+        pmemobj_persist(trans,zl, len);
+    }
+    else
+    {
+        zl = zrealloc(zl,len);
+        ZIPLIST_BYTES(zl) = intrev32ifbe(len);
+        zl[len-1] = ZIP_END;
+    }
     return zl;
 }
 
@@ -453,7 +476,7 @@ static unsigned char *ziplistResize(unsigned char *zl, unsigned int len) {
  *
  * The pointer "p" points to the first entry that does NOT need to be
  * updated, i.e. consecutive fields MAY need an update. */
-static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p) {
+static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p, PM_TRANS trans) {
     size_t curlen = intrev32ifbe(ZIPLIST_BYTES(zl)), rawlen, rawlensize;
     size_t offset, noffset, extra;
     unsigned char *np;
@@ -476,7 +499,7 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
              * the raw length of "cur". */
             offset = p-zl;
             extra = rawlensize-next.prevrawlensize;
-            zl = ziplistResize(zl,curlen+extra);
+            zl = ziplistResize(zl,curlen+extra,trans);
             p = zl+offset;
 
             /* Current pointer and offset for next element. */
@@ -515,7 +538,7 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
 }
 
 /* Delete "num" entries, starting at "p". Returns pointer to the ziplist. */
-static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsigned int num) {
+static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsigned int num, PM_TRANS trans) {
     unsigned int i, totlen, deleted = 0;
     size_t offset;
     int nextdiff = 0;
@@ -562,20 +585,20 @@ static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsig
 
         /* Resize and update length */
         offset = first.p-zl;
-        zl = ziplistResize(zl, intrev32ifbe(ZIPLIST_BYTES(zl))-totlen+nextdiff);
+        zl = ziplistResize(zl, intrev32ifbe(ZIPLIST_BYTES(zl))-totlen+nextdiff,trans);
         ZIPLIST_INCR_LENGTH(zl,-deleted);
         p = zl+offset;
 
         /* When nextdiff != 0, the raw length of the next entry has changed, so
          * we need to cascade the update throughout the ziplist */
         if (nextdiff != 0)
-            zl = __ziplistCascadeUpdate(zl,p);
+            zl = __ziplistCascadeUpdate(zl,p,trans);
     }
     return zl;
 }
 
 /* Insert item at "p". */
-static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen) {
+static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen, PM_TRANS trans) {
     size_t curlen = intrev32ifbe(ZIPLIST_BYTES(zl)), reqlen;
     unsigned int prevlensize, prevlen = 0;
     size_t offset;
@@ -617,7 +640,7 @@ static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsig
 
     /* Store offset because a realloc may change the address of zl. */
     offset = p-zl;
-    zl = ziplistResize(zl,curlen+reqlen+nextdiff);
+    zl = ziplistResize(zl,curlen+reqlen+nextdiff, trans);
     p = zl+offset;
 
     /* Apply memory move when necessary and update tail offset. */
@@ -649,7 +672,7 @@ static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsig
      * we need to cascade the update throughout the ziplist */
     if (nextdiff != 0) {
         offset = p-zl;
-        zl = __ziplistCascadeUpdate(zl,p+reqlen);
+        zl = __ziplistCascadeUpdate(zl,p+reqlen,trans);
         p = zl+offset;
     }
 
@@ -665,10 +688,10 @@ static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsig
     return zl;
 }
 
-unsigned char *ziplistPush(unsigned char *zl, unsigned char *s, unsigned int slen, int where) {
+unsigned char *ziplistPush(unsigned char *zl, unsigned char *s, unsigned int slen, int where, PM_TRANS trans) {
     unsigned char *p;
     p = (where == ZIPLIST_HEAD) ? ZIPLIST_ENTRY_HEAD(zl) : ZIPLIST_ENTRY_END(zl);
-    return __ziplistInsert(zl,p,s,slen);
+    return __ziplistInsert(zl,p,s,slen, trans);
 }
 
 /* Returns an offset to use for iterating with ziplistNext. When the given
@@ -763,16 +786,16 @@ unsigned int ziplistGet(unsigned char *p, unsigned char **sstr, unsigned int *sl
 }
 
 /* Insert an entry at "p". */
-unsigned char *ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen) {
-    return __ziplistInsert(zl,p,s,slen);
+unsigned char *ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen, PM_TRANS trans) {
+    return __ziplistInsert(zl,p,s,slen,trans);
 }
 
 /* Delete a single entry from the ziplist, pointed to by *p.
  * Also update *p in place, to be able to iterate over the
  * ziplist, while deleting entries. */
-unsigned char *ziplistDelete(unsigned char *zl, unsigned char **p) {
+unsigned char *ziplistDelete(unsigned char *zl, unsigned char **p, PM_TRANS trans) {
     size_t offset = *p-zl;
-    zl = __ziplistDelete(zl,*p,1);
+    zl = __ziplistDelete(zl,*p,1,trans);
 
     /* Store pointer to current element in p, because ziplistDelete will
      * do a realloc which might result in a different "zl"-pointer.
@@ -783,9 +806,9 @@ unsigned char *ziplistDelete(unsigned char *zl, unsigned char **p) {
 }
 
 /* Delete a range of entries from the ziplist. */
-unsigned char *ziplistDeleteRange(unsigned char *zl, unsigned int index, unsigned int num) {
+unsigned char *ziplistDeleteRange(unsigned char *zl, unsigned int index, unsigned int num, PM_TRANS trans) {
     unsigned char *p = ziplistIndex(zl,index);
-    return (p == NULL) ? zl : __ziplistDelete(zl,p,num);
+    return (p == NULL) ? zl : __ziplistDelete(zl,p,num,trans);
 }
 
 /* Compare entry pointer to by 'p' with 'sstr' of length 'slen'. */

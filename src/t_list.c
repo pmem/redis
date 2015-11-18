@@ -36,11 +36,11 @@
 /* Check the argument length to see if it requires us to convert the ziplist
  * to a real list. Only check raw-encoded objects because integer encoded
  * objects are never too long. */
-void listTypeTryConversion(robj *subject, robj *value) {
+void listTypeTryConversion(robj *subject, robj *value, PM_TRANS trans) {
     if (subject->encoding != REDIS_ENCODING_ZIPLIST) return;
     if (value->encoding == REDIS_ENCODING_RAW &&
         sdslen(value->ptr) > server.list_max_ziplist_value)
-            listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
+            listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST,trans);
 }
 
 /* The function pushes an element to the specified list object 'subject',
@@ -48,31 +48,39 @@ void listTypeTryConversion(robj *subject, robj *value) {
  *
  * There is no need for the caller to increment the refcount of 'value' as
  * the function takes care of it if needed. */
-void listTypePush(robj *subject, robj *value, int where) {
+void listTypePush(robj *subject, robj *value, int where, PM_TRANS trans) {
     /* Check if we need to convert the ziplist */
-    listTypeTryConversion(subject,value);
+    listTypeTryConversion(subject,value,trans);
     if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
         ziplistLen(subject->ptr) >= server.list_max_ziplist_entries)
-            listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
+            listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST,trans);
 
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
         int pos = (where == REDIS_HEAD) ? ZIPLIST_HEAD : ZIPLIST_TAIL;
-        value = getDecodedObject(value);
-        subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),pos);
-        decrRefCount(value);
+        value = getDecodedObject(value,trans);
+        unsigned char * zl = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),pos,trans);
+        if(PM_TRANS_RAM!=trans)
+        {
+            pm_trans_set(trans,&(subject->ptr), zl);
+        }
+        else
+        {
+            subject->ptr = zl;
+        }
+        decrRefCount(value,trans);
     } else if (subject->encoding == REDIS_ENCODING_LINKEDLIST) {
         if (where == REDIS_HEAD) {
-            listAddNodeHead(subject->ptr,value);
+            listAddNodeHead(subject->ptr,value,trans);
         } else {
-            listAddNodeTail(subject->ptr,value);
+            listAddNodeTail(subject->ptr,value,trans);
         }
-        incrRefCount(value);
+        incrRefCount(value,trans);
     } else {
         redisPanic("Unknown list encoding");
     }
 }
 
-robj *listTypePop(robj *subject, int where) {
+robj *listTypePop(robj *subject, int where, PM_TRANS trans) {
     robj *value = NULL;
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *p;
@@ -83,12 +91,12 @@ robj *listTypePop(robj *subject, int where) {
         p = ziplistIndex(subject->ptr,pos);
         if (ziplistGet(p,&vstr,&vlen,&vlong)) {
             if (vstr) {
-                value = createStringObject((char*)vstr,vlen);
+                value = createStringObject((char*)vstr,vlen,trans);
             } else {
-                value = createStringObjectFromLongLong(vlong);
+                value = createStringObjectFromLongLong(vlong,trans);
             }
             /* We only need to delete an element when it exists */
-            subject->ptr = ziplistDelete(subject->ptr,&p);
+            subject->ptr = ziplistDelete(subject->ptr,&p,trans);
         }
     } else if (subject->encoding == REDIS_ENCODING_LINKEDLIST) {
         list *list = subject->ptr;
@@ -100,8 +108,8 @@ robj *listTypePop(robj *subject, int where) {
         }
         if (ln != NULL) {
             value = listNodeValue(ln);
-            incrRefCount(value);
-            listDelNode(list,ln);
+            incrRefCount(value,trans);
+            listDelNode(list,ln,trans);
         }
     } else {
         redisPanic("Unknown list encoding");
@@ -183,46 +191,46 @@ robj *listTypeGet(listTypeEntry *entry) {
         redisAssert(entry->zi != NULL);
         if (ziplistGet(entry->zi,&vstr,&vlen,&vlong)) {
             if (vstr) {
-                value = createStringObject((char*)vstr,vlen);
+                value = createStringObject((char*)vstr,vlen,PM_TRANS_RAM);
             } else {
-                value = createStringObjectFromLongLong(vlong);
+                value = createStringObjectFromLongLong(vlong,PM_TRANS_RAM);
             }
         }
     } else if (li->encoding == REDIS_ENCODING_LINKEDLIST) {
         redisAssert(entry->ln != NULL);
         value = listNodeValue(entry->ln);
-        incrRefCount(value);
+        incrRefCount(value,PM_TRANS_RAM);
     } else {
         redisPanic("Unknown list encoding");
     }
     return value;
 }
 
-void listTypeInsert(listTypeEntry *entry, robj *value, int where) {
+void listTypeInsert(listTypeEntry *entry, robj *value, int where, PM_TRANS trans) {
     robj *subject = entry->li->subject;
     if (entry->li->encoding == REDIS_ENCODING_ZIPLIST) {
-        value = getDecodedObject(value);
+        value = getDecodedObject(value,trans);
         if (where == REDIS_TAIL) {
             unsigned char *next = ziplistNext(subject->ptr,entry->zi);
 
             /* When we insert after the current element, but the current element
              * is the tail of the list, we need to do a push. */
             if (next == NULL) {
-                subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),REDIS_TAIL);
+                subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),REDIS_TAIL,trans);
             } else {
-                subject->ptr = ziplistInsert(subject->ptr,next,value->ptr,sdslen(value->ptr));
+                subject->ptr = ziplistInsert(subject->ptr,next,value->ptr,sdslen(value->ptr),trans);
             }
         } else {
-            subject->ptr = ziplistInsert(subject->ptr,entry->zi,value->ptr,sdslen(value->ptr));
+            subject->ptr = ziplistInsert(subject->ptr,entry->zi,value->ptr,sdslen(value->ptr),trans);
         }
-        decrRefCount(value);
+        decrRefCount(value,trans);
     } else if (entry->li->encoding == REDIS_ENCODING_LINKEDLIST) {
         if (where == REDIS_TAIL) {
-            listInsertNode(subject->ptr,entry->ln,value,AL_START_TAIL);
+            listInsertNode(subject->ptr,entry->ln,value,AL_START_TAIL,trans);
         } else {
-            listInsertNode(subject->ptr,entry->ln,value,AL_START_HEAD);
+            listInsertNode(subject->ptr,entry->ln,value,AL_START_HEAD,trans);
         }
-        incrRefCount(value);
+        incrRefCount(value,trans);
     } else {
         redisPanic("Unknown list encoding");
     }
@@ -242,11 +250,11 @@ int listTypeEqual(listTypeEntry *entry, robj *o) {
 }
 
 /* Delete the element pointed to. */
-void listTypeDelete(listTypeEntry *entry) {
+void listTypeDelete(listTypeEntry *entry, PM_TRANS trans) {
     listTypeIterator *li = entry->li;
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *p = entry->zi;
-        li->subject->ptr = ziplistDelete(li->subject->ptr,&p);
+        li->subject->ptr = ziplistDelete(li->subject->ptr,&p,trans);
 
         /* Update position of the iterator depending on the direction */
         if (li->direction == REDIS_TAIL)
@@ -259,25 +267,25 @@ void listTypeDelete(listTypeEntry *entry) {
             next = entry->ln->next;
         else
             next = entry->ln->prev;
-        listDelNode(li->subject->ptr,entry->ln);
+        listDelNode(li->subject->ptr,entry->ln,trans);
         li->ln = next;
     } else {
         redisPanic("Unknown list encoding");
     }
 }
 
-void listTypeConvert(robj *subject, int enc) {
+void listTypeConvert(robj *subject, int enc, PM_TRANS trans) {
     listTypeIterator *li;
     listTypeEntry entry;
     redisAssertWithInfo(NULL,subject,subject->type == REDIS_LIST);
 
     if (enc == REDIS_ENCODING_LINKEDLIST) {
-        list *l = listCreate();
+        list *l = listCreate(trans);
         listSetFreeMethod(l,decrRefCountVoid);
 
         /* listTypeGet returns a robj with incremented refcount */
         li = listTypeInitIterator(subject,0,REDIS_TAIL);
-        while (listTypeNext(li,&entry)) listAddNodeTail(l,listTypeGet(&entry));
+        while (listTypeNext(li,&entry)) listAddNodeTail(l,listTypeGet(&entry),trans);
         listTypeReleaseIterator(li);
 
         subject->encoding = REDIS_ENCODING_LINKEDLIST;
@@ -301,15 +309,40 @@ void pushGenericCommand(redisClient *c, int where) {
         return;
     }
 
+
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     for (j = 2; j < c->argc; j++) {
-        c->argv[j] = tryObjectEncoding(c->argv[j]);
+        c->argv[j] = tryObjectEncoding(c->argv[j],PM_TRANS_RAM);
         if (!lobj) {
-            lobj = createZiplistObject();
-            dbAdd(c->db,c->argv[1],lobj);
+            lobj = createZiplistObject(trans);
+            dbAdd(c->db,c->argv[1],lobj, trans);
         }
-        listTypePush(lobj,c->argv[j],where);
+        robj* val=c->argv[j];
+        if(PM_TRANS_RAM!=trans)
+        {
+            /*Copy value to persistent, work only for string*/
+            val = createValObject(val, trans);
+        }
+        listTypePush(lobj,val,where, trans);
+        if(PM_TRANS_RAM!=trans)
+        {
+            decrRefCount(val, trans); /* Remove not handle copy of value from PM*/
+        }
         pushed++;
     }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     addReplyLongLong(c, waiting + (lobj ? listTypeLength(lobj) : 0));
     if (pushed) {
         char *event = (where == REDIS_HEAD) ? "lpush" : "rpush";
@@ -337,19 +370,25 @@ void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
     if ((subject = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,subject,REDIS_LIST)) return;
 
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     if (refval != NULL) {
         /* We're not sure if this value can be inserted yet, but we cannot
          * convert the list inside the iterator. We don't want to loop over
          * the list twice (once to see if the value can be inserted and once
          * to do the actual insert), so we assume this value can be inserted
          * and convert the ziplist to a regular list if necessary. */
-        listTypeTryConversion(subject,val);
+        listTypeTryConversion(subject,val,trans);
 
         /* Seek refval from head to tail */
         iter = listTypeInitIterator(subject,0,REDIS_TAIL);
         while (listTypeNext(iter,&entry)) {
             if (listTypeEqual(&entry,refval)) {
-                listTypeInsert(&entry,val,where);
+                listTypeInsert(&entry,val,where,trans);
                 inserted = 1;
                 break;
             }
@@ -360,12 +399,18 @@ void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
             /* Check if the length exceeds the ziplist length threshold. */
             if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
                 ziplistLen(subject->ptr) > server.list_max_ziplist_entries)
-                    listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
+                    listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST,trans);
             signalModifiedKey(c->db,c->argv[1]);
             notifyKeyspaceEvent(REDIS_NOTIFY_LIST,"linsert",
                                 c->argv[1],c->db->id);
             server.dirty++;
         } else {
+
+
+            if(PM_TRANS_RAM!=trans)
+            {
+                pm_trans_end(trans);
+            }
             /* Notify client of a failed insert */
             addReply(c,shared.cnegone);
             return;
@@ -373,27 +418,33 @@ void pushxGenericCommand(redisClient *c, robj *refval, robj *val, int where) {
     } else {
         char *event = (where == REDIS_HEAD) ? "lpush" : "rpush";
 
-        listTypePush(subject,val,where);
+        listTypePush(subject,val,where,trans);
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(REDIS_NOTIFY_LIST,event,c->argv[1],c->db->id);
         server.dirty++;
+    }
+
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        pm_trans_end(trans);
     }
 
     addReplyLongLong(c,listTypeLength(subject));
 }
 
 void lpushxCommand(redisClient *c) {
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    c->argv[2] = tryObjectEncoding(c->argv[2],PM_TRANS_RAM);
     pushxGenericCommand(c,NULL,c->argv[2],REDIS_HEAD);
 }
 
 void rpushxCommand(redisClient *c) {
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    c->argv[2] = tryObjectEncoding(c->argv[2],PM_TRANS_RAM);
     pushxGenericCommand(c,NULL,c->argv[2],REDIS_TAIL);
 }
 
 void linsertCommand(redisClient *c) {
-    c->argv[4] = tryObjectEncoding(c->argv[4]);
+    c->argv[4] = tryObjectEncoding(c->argv[4],PM_TRANS_RAM);
     if (strcasecmp(c->argv[2]->ptr,"after") == 0) {
         pushxGenericCommand(c,c->argv[3],c->argv[4],REDIS_TAIL);
     } else if (strcasecmp(c->argv[2]->ptr,"before") == 0) {
@@ -426,12 +477,12 @@ void lindexCommand(redisClient *c) {
         p = ziplistIndex(o->ptr,index);
         if (ziplistGet(p,&vstr,&vlen,&vlong)) {
             if (vstr) {
-                value = createStringObject((char*)vstr,vlen);
+                value = createStringObject((char*)vstr,vlen,PM_TRANS_RAM);
             } else {
-                value = createStringObjectFromLongLong(vlong);
+                value = createStringObjectFromLongLong(vlong,PM_TRANS_RAM);
             }
             addReplyBulk(c,value);
-            decrRefCount(value);
+            decrRefCount(value,NULL);
         } else {
             addReply(c,shared.nullbulk);
         }
@@ -452,35 +503,45 @@ void lsetCommand(redisClient *c) {
     robj *o = lookupKeyWriteOrReply(c,c->argv[1],shared.nokeyerr);
     if (o == NULL || checkType(c,o,REDIS_LIST)) return;
     long index;
-    robj *value = (c->argv[3] = tryObjectEncoding(c->argv[3]));
+    robj *value = (c->argv[3] = tryObjectEncoding(c->argv[3],PM_TRANS_RAM));
 
     if ((getLongFromObjectOrReply(c, c->argv[2], &index, NULL) != REDIS_OK))
         return;
 
-    listTypeTryConversion(o,value);
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    listTypeTryConversion(o,value,trans);
     if (o->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *p, *zl = o->ptr;
         p = ziplistIndex(zl,index);
         if (p == NULL) {
             addReply(c,shared.outofrangeerr);
         } else {
-            o->ptr = ziplistDelete(o->ptr,&p);
-            value = getDecodedObject(value);
-            o->ptr = ziplistInsert(o->ptr,p,value->ptr,sdslen(value->ptr));
-            decrRefCount(value);
+
+            o->ptr = ziplistDelete(o->ptr,&p,trans);
+            value = getDecodedObject(value,trans);
+            o->ptr = ziplistInsert(o->ptr,p,value->ptr,sdslen(value->ptr),trans);
+            decrRefCount(value,trans);
             addReply(c,shared.ok);
             signalModifiedKey(c->db,c->argv[1]);
             notifyKeyspaceEvent(REDIS_NOTIFY_LIST,"lset",c->argv[1],c->db->id);
             server.dirty++;
+
+
+
         }
     } else if (o->encoding == REDIS_ENCODING_LINKEDLIST) {
         listNode *ln = listIndex(o->ptr,index);
         if (ln == NULL) {
             addReply(c,shared.outofrangeerr);
         } else {
-            decrRefCount((robj*)listNodeValue(ln));
+            decrRefCount((robj*)listNodeValue(ln),trans);
             listNodeValue(ln) = value;
-            incrRefCount(value);
+            incrRefCount(value,trans);
             addReply(c,shared.ok);
             signalModifiedKey(c->db,c->argv[1]);
             notifyKeyspaceEvent(REDIS_NOTIFY_LIST,"lset",c->argv[1],c->db->id);
@@ -489,20 +550,33 @@ void lsetCommand(redisClient *c) {
     } else {
         redisPanic("Unknown list encoding");
     }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
 }
 
 void popGenericCommand(redisClient *c, int where) {
     robj *o = lookupKeyWriteOrReply(c,c->argv[1],shared.nullbulk);
     if (o == NULL || checkType(c,o,REDIS_LIST)) return;
 
-    robj *value = listTypePop(o,where);
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    robj *value = listTypePop(o,where,trans);
+
     if (value == NULL) {
         addReply(c,shared.nullbulk);
     } else {
         char *event = (where == REDIS_HEAD) ? "lpop" : "rpop";
 
         addReplyBulk(c,value);
-        decrRefCount(value);
+        decrRefCount(value,trans);
         notifyKeyspaceEvent(REDIS_NOTIFY_LIST,event,c->argv[1],c->db->id);
         if (listTypeLength(o) == 0) {
             notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",
@@ -512,6 +586,12 @@ void popGenericCommand(redisClient *c, int where) {
         signalModifiedKey(c->db,c->argv[1]);
         server.dirty++;
     }
+
+    if(PM_TRANS_RAM!=trans)
+       {
+           /* Finish transaction*/
+           pm_trans_end(trans);
+       }
 }
 
 void lpopCommand(redisClient *c) {
@@ -611,19 +691,26 @@ void ltrimCommand(redisClient *c) {
         rtrim = llen-end-1;
     }
 
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     /* Remove list elements to perform the trim */
     if (o->encoding == REDIS_ENCODING_ZIPLIST) {
-        o->ptr = ziplistDeleteRange(o->ptr,0,ltrim);
-        o->ptr = ziplistDeleteRange(o->ptr,-rtrim,rtrim);
+        o->ptr = ziplistDeleteRange(o->ptr,0,ltrim,trans);
+        o->ptr = ziplistDeleteRange(o->ptr,-rtrim,rtrim,trans);
     } else if (o->encoding == REDIS_ENCODING_LINKEDLIST) {
         list = o->ptr;
         for (j = 0; j < ltrim; j++) {
             ln = listFirst(list);
-            listDelNode(list,ln);
+            listDelNode(list,ln,trans);
         }
         for (j = 0; j < rtrim; j++) {
             ln = listLast(list);
-            listDelNode(list,ln);
+            listDelNode(list,ln,trans);
         }
     } else {
         redisPanic("Unknown list encoding");
@@ -634,6 +721,13 @@ void ltrimCommand(redisClient *c) {
         dbDelete(c->db,c->argv[1]);
         notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
     }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     signalModifiedKey(c->db,c->argv[1]);
     server.dirty++;
     addReply(c,shared.ok);
@@ -641,7 +735,7 @@ void ltrimCommand(redisClient *c) {
 
 void lremCommand(redisClient *c) {
     robj *subject, *obj;
-    obj = c->argv[3] = tryObjectEncoding(c->argv[3]);
+    obj = c->argv[3] = tryObjectEncoding(c->argv[3],PM_TRANS_RAM);
     long toremove;
     long removed = 0;
     listTypeEntry entry;
@@ -649,12 +743,19 @@ void lremCommand(redisClient *c) {
     if ((getLongFromObjectOrReply(c, c->argv[2], &toremove, NULL) != REDIS_OK))
         return;
 
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     subject = lookupKeyWriteOrReply(c,c->argv[1],shared.czero);
     if (subject == NULL || checkType(c,subject,REDIS_LIST)) return;
 
     /* Make sure obj is raw when we're dealing with a ziplist */
     if (subject->encoding == REDIS_ENCODING_ZIPLIST)
-        obj = getDecodedObject(obj);
+        obj = getDecodedObject(obj,trans);
 
     listTypeIterator *li;
     if (toremove < 0) {
@@ -666,7 +767,7 @@ void lremCommand(redisClient *c) {
 
     while (listTypeNext(li,&entry)) {
         if (listTypeEqual(&entry,obj)) {
-            listTypeDelete(&entry);
+            listTypeDelete(&entry,trans);
             server.dirty++;
             removed++;
             if (toremove && removed == toremove) break;
@@ -676,11 +777,18 @@ void lremCommand(redisClient *c) {
 
     /* Clean up raw encoded object */
     if (subject->encoding == REDIS_ENCODING_ZIPLIST)
-        decrRefCount(obj);
+        decrRefCount(obj,trans);
 
     if (listTypeLength(subject) == 0) dbDelete(c->db,c->argv[1]);
     addReplyLongLong(c,removed);
     if (removed) signalModifiedKey(c->db,c->argv[1]);
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
 }
 
 /* This is the semantic of this command:
@@ -702,11 +810,26 @@ void lremCommand(redisClient *c) {
 void rpoplpushHandlePush(redisClient *c, robj *dstkey, robj *dstobj, robj *value) {
     /* Create the list if the key does not exist */
     if (!dstobj) {
-        dstobj = createZiplistObject();
-        dbAdd(c->db,dstkey,dstobj);
+        dstobj = createZiplistObject(PM_TRANS_RAM);
+        dbAdd(c->db,dstkey,dstobj,PM_TRANS_RAM);
     }
     signalModifiedKey(c->db,dstkey);
-    listTypePush(dstobj,value,REDIS_HEAD);
+
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    listTypePush(dstobj,value,REDIS_HEAD,trans);
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     notifyKeyspaceEvent(REDIS_NOTIFY_LIST,"lpush",dstkey,c->db->id);
     /* Always send the pushed value to the client. */
     addReplyBulk(c,value);
@@ -725,16 +848,22 @@ void rpoplpushCommand(redisClient *c) {
         robj *dobj = lookupKeyWrite(c->db,c->argv[2]);
         robj *touchedkey = c->argv[1];
 
+        PM_TRANS trans = PM_TRANS_RAM;
+        if(c->db->dict->type->persistent)
+        {
+            trans = pm_pool;
+        }
+
         if (dobj && checkType(c,dobj,REDIS_LIST)) return;
-        value = listTypePop(sobj,REDIS_TAIL);
+        value = listTypePop(sobj,REDIS_TAIL,trans);
         /* We saved touched key, and protect it, since rpoplpushHandlePush
          * may change the client command argument vector (it does not
          * currently). */
-        incrRefCount(touchedkey);
+        incrRefCount(touchedkey,trans);
         rpoplpushHandlePush(c,c->argv[2],dobj,value);
 
         /* listTypePop returns an object with its refcount incremented */
-        decrRefCount(value);
+        decrRefCount(value,trans);
 
         /* Delete the source list when it is empty */
         notifyKeyspaceEvent(REDIS_NOTIFY_LIST,"rpop",touchedkey,c->db->id);
@@ -743,9 +872,16 @@ void rpoplpushCommand(redisClient *c) {
             notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",
                                 touchedkey,c->db->id);
         }
+
         signalModifiedKey(c->db,touchedkey);
-        decrRefCount(touchedkey);
+        decrRefCount(touchedkey,trans);
         server.dirty++;
+
+        if(PM_TRANS_RAM!=trans)
+        {
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
     }
 }
 
@@ -780,12 +916,12 @@ void blockForKeys(redisClient *c, robj **keys, int numkeys, time_t timeout, robj
     c->bpop.timeout = timeout;
     c->bpop.target = target;
 
-    if (target != NULL) incrRefCount(target);
+    if (target != NULL) incrRefCount(target,PM_TRANS_RAM);
 
     for (j = 0; j < numkeys; j++) {
         /* If the key already exists in the dict ignore it. */
-        if (dictAdd(c->bpop.keys,keys[j],NULL) != DICT_OK) continue;
-        incrRefCount(keys[j]);
+        if (dictAdd(c->bpop.keys,keys[j],NULL,PM_TRANS_RAM) != DICT_OK) continue;
+        incrRefCount(keys[j],PM_TRANS_RAM);
 
         /* And in the other "side", to map keys -> clients */
         de = dictFind(c->db->blocking_keys,keys[j]);
@@ -793,14 +929,14 @@ void blockForKeys(redisClient *c, robj **keys, int numkeys, time_t timeout, robj
             int retval;
 
             /* For every key we take a list of clients blocked for it */
-            l = listCreate();
-            retval = dictAdd(c->db->blocking_keys,keys[j],l);
-            incrRefCount(keys[j]);
+            l = listCreate(PM_TRANS_RAM);
+            retval = dictAdd(c->db->blocking_keys,keys[j],l,PM_TRANS_RAM);
+            incrRefCount(keys[j],PM_TRANS_RAM);
             redisAssertWithInfo(c,keys[j],retval == DICT_OK);
         } else {
             l = dictGetVal(de);
         }
-        listAddNodeTail(l,c);
+        listAddNodeTail(l,c,PM_TRANS_RAM);
     }
 
     /* Mark the client as a blocked client */
@@ -823,7 +959,7 @@ void unblockClientWaitingData(redisClient *c) {
         /* Remove this client from the list of clients waiting for this key. */
         l = dictFetchValue(c->db->blocking_keys,key);
         redisAssertWithInfo(c,key,l != NULL);
-        listDelNode(l,listSearchKey(l,c));
+        listDelNode(l,listSearchKey(l,c),PM_TRANS_RAM);
         /* If the list is empty we need to remove it to avoid wasting memory */
         if (listLength(l) == 0)
             dictDelete(c->db->blocking_keys,key);
@@ -833,13 +969,13 @@ void unblockClientWaitingData(redisClient *c) {
     /* Cleanup the client structure */
     dictEmpty(c->bpop.keys,NULL);
     if (c->bpop.target) {
-        decrRefCount(c->bpop.target);
+        decrRefCount(c->bpop.target,PM_TRANS_RAM);
         c->bpop.target = NULL;
     }
     c->flags &= ~REDIS_BLOCKED;
     c->flags |= REDIS_UNBLOCKED;
     server.bpop_blocked_clients--;
-    listAddNodeTail(server.unblocked_clients,c);
+    listAddNodeTail(server.unblocked_clients,c,PM_TRANS_RAM);
 }
 
 /* If the specified key has clients blocked waiting for list pushes, this
@@ -862,14 +998,14 @@ void signalListAsReady(redisDb *db, robj *key) {
     rl = zmalloc(sizeof(*rl));
     rl->key = key;
     rl->db = db;
-    incrRefCount(key);
-    listAddNodeTail(server.ready_keys,rl);
+    incrRefCount(key,PM_TRANS_RAM);
+    listAddNodeTail(server.ready_keys,rl,PM_TRANS_RAM);
 
     /* We also add the key in the db->ready_keys dictionary in order
      * to avoid adding it multiple times into a list with a simple O(1)
      * check. */
-    incrRefCount(key);
-    redisAssert(dictAdd(db->ready_keys,key,NULL) == DICT_OK);
+    incrRefCount(key,PM_TRANS_RAM);
+    redisAssert(dictAdd(db->ready_keys,key,NULL,PM_TRANS_RAM) == DICT_OK);
 }
 
 /* This is a helper function for handleClientsBlockedOnLists(). It's work
@@ -960,7 +1096,7 @@ void handleClientsBlockedOnLists(void) {
          * signalListAsReady() that may push new elements in server.ready_keys
          * when handling clients blocked into BRPOPLPUSH. */
         l = server.ready_keys;
-        server.ready_keys = listCreate();
+        server.ready_keys = listCreate(PM_TRANS_RAM);
 
         while(listLength(l) != 0) {
             listNode *ln = listFirst(l);
@@ -984,19 +1120,27 @@ void handleClientsBlockedOnLists(void) {
                     int numclients = listLength(clients);
 
                     while(numclients--) {
+
+                        /*Check that value should be keep in persistent memory*/
+                        PM_TRANS trans = PM_TRANS_RAM;
+                        if(rl->db->dict->type->persistent)
+                        {
+                            trans = pm_pool;
+                        }
+
                         listNode *clientnode = listFirst(clients);
                         redisClient *receiver = clientnode->value;
                         robj *dstkey = receiver->bpop.target;
                         int where = (receiver->lastcmd &&
                                      receiver->lastcmd->proc == blpopCommand) ?
                                     REDIS_HEAD : REDIS_TAIL;
-                        robj *value = listTypePop(o,where);
+                        robj *value = listTypePop(o,where,trans);
 
                         if (value) {
                             /* Protect receiver->bpop.target, that will be
                              * freed by the next unblockClientWaitingData()
                              * call. */
-                            if (dstkey) incrRefCount(dstkey);
+                            if (dstkey) incrRefCount(dstkey,PM_TRANS_RAM);
                             unblockClientWaitingData(receiver);
 
                             if (serveClientBlockedOnList(receiver,
@@ -1005,12 +1149,21 @@ void handleClientsBlockedOnLists(void) {
                             {
                                 /* If we failed serving the client we need
                                  * to also undo the POP operation. */
-                                    listTypePush(o,value,where);
+                                    listTypePush(o,value,where,trans);
                             }
 
-                            if (dstkey) decrRefCount(dstkey);
-                            decrRefCount(value);
-                        } else {
+                            if (dstkey) decrRefCount(dstkey,PM_TRANS_RAM);
+                            decrRefCount(value,PM_TRANS_RAM);
+                        }
+
+                        if(PM_TRANS_RAM!=trans)
+                        {
+                            /* Finish transaction*/
+                            pm_trans_end(trans);
+                        }
+
+                        if(!value)
+                        {
                             break;
                         }
                     }
@@ -1022,11 +1175,11 @@ void handleClientsBlockedOnLists(void) {
             }
 
             /* Free this item. */
-            decrRefCount(rl->key);
+            decrRefCount(rl->key,PM_TRANS_RAM);
             zfree(rl);
-            listDelNode(l,ln);
+            listDelNode(l,ln,PM_TRANS_RAM);
         }
-        listRelease(l); /* We have the new list on place at this point. */
+        listRelease(l,PM_TRANS_RAM); /* We have the new list on place at this point. */
     }
 }
 
@@ -1067,13 +1220,20 @@ void blockingPopGenericCommand(redisClient *c, int where) {
                 if (listTypeLength(o) != 0) {
                     /* Non empty list, this is like a non normal [LR]POP. */
                     char *event = (where == REDIS_HEAD) ? "lpop" : "rpop";
-                    robj *value = listTypePop(o,where);
+                    /*Check that value should be keep in persistent memory*/
+                    PM_TRANS trans = PM_TRANS_RAM;
+                    if(c->db->dict->type->persistent)
+                    {
+                        trans = pm_pool;
+                    }
+
+                    robj *value = listTypePop(o,where,trans);
                     redisAssert(value != NULL);
 
                     addReplyMultiBulkLen(c,2);
                     addReplyBulk(c,c->argv[j]);
                     addReplyBulk(c,value);
-                    decrRefCount(value);
+                    decrRefCount(value,trans);
                     notifyKeyspaceEvent(REDIS_NOTIFY_LIST,event,
                                         c->argv[j],c->db->id);
                     if (listTypeLength(o) == 0) {
@@ -1081,6 +1241,13 @@ void blockingPopGenericCommand(redisClient *c, int where) {
                         notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",
                                             c->argv[j],c->db->id);
                     }
+
+                    if(PM_TRANS_RAM!=trans)
+                    {
+                        /* Finish transaction*/
+                        pm_trans_end(trans);
+                    }
+
                     signalModifiedKey(c->db,c->argv[j]);
                     server.dirty++;
 

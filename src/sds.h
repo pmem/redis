@@ -35,6 +35,7 @@
 
 #include <sys/types.h>
 #include <stdarg.h>
+#include "pm.h"
 
 typedef char *sds;
 
@@ -43,6 +44,14 @@ struct sdshdr {
     unsigned int free;
     char buf[];
 };
+
+/* Object passed to constructor of String object during PM allocation */
+typedef struct constructorArgument {
+    void *ptr;              /* pointer to data - value */
+    int len;                /* length of value */
+    unsigned lruclock:22;   /* lru time (relative to server.lruclock) - used for strings only*/
+    void *dict;                 /* dictionary - used for Dictrionary entry init*/
+} carg;
 
 static inline size_t sdslen(const sds s) {
     struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
@@ -54,12 +63,25 @@ static inline size_t sdsavail(const sds s) {
     return sh->free;
 }
 
-sds sdsnewlen(const void *init, size_t initlen);
-sds sdsnew(const char *init);
-sds sdsempty(void);
+static inline size_t sdstotal(const sds s) {
+    struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
+    return sh->free + sh->len;
+}
+
+static inline size_t sdsnewlen_alloc_size(size_t initlen) {
+    return sizeof(struct sdshdr)+initlen+1;
+}
+
+sds sdsnewlen_prepare_buff(struct sdshdr* hdr_buff, const void *init, size_t initlen);
+sds sdsnewlen(const void *init, size_t initlen, PM_TRANS trans);
+sds sdsnewlen_aligned(const void *init, size_t initlen, size_t align, PM_TRANS trans);
+sds sdsnew(const char *init, PM_TRANS trans);
+sds sdsempty(PM_TRANS trans);
 size_t sdslen(const sds s);
-sds sdsdup(const sds s);
-void sdsfree(sds s);
+sds sdsdup(const sds s, PM_TRANS trans);
+sds sdsdup_pm(const sds s, PM_TRANS trans);
+sds sdsdup_pm_fast(const sds s, PM_TRANS trans);
+void sdsfree(sds s, PM_TRANS trans);
 size_t sdsavail(const sds s);
 sds sdsgrowzero(sds s, size_t len);
 sds sdscatlen(sds s, const void *t, size_t len);
@@ -82,11 +104,11 @@ void sdsrange(sds s, int start, int end);
 void sdsupdatelen(sds s);
 void sdsclear(sds s);
 int sdscmp(const sds s1, const sds s2);
-sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count);
-void sdsfreesplitres(sds *tokens, int count);
+sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count, PM_TRANS trans);
+void sdsfreesplitres(sds *tokens, int count, PM_TRANS trans);
 void sdstolower(sds s);
 void sdstoupper(sds s);
-sds sdsfromlonglong(long long value);
+sds sdsfromlonglong(long long value, PM_TRANS trans);
 sds sdscatrepr(sds s, const char *p, size_t len);
 sds *sdssplitargs(const char *line, int *argc);
 sds sdsmapchars(sds s, const char *from, const char *to, size_t setlen);
@@ -95,7 +117,8 @@ sds sdsjoin(char **argv, int argc, char *sep);
 /* Low level functions exposed to the user API */
 sds sdsMakeRoomFor(sds s, size_t addlen);
 void sdsIncrLen(sds s, int incr);
-sds sdsRemoveFreeSpace(sds s);
+sds sdsRemoveFreeSpace(sds s, PM_TRANS trans);
 size_t sdsAllocSize(sds s);
+
 
 #endif

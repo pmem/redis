@@ -47,6 +47,7 @@
 #include <netinet/in.h>
 #include <lua.h>
 #include <signal.h>
+#include <sys/mman.h>
 
 typedef long long mstime_t; /* millisecond time type. */
 
@@ -112,11 +113,19 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_DEFAULT_RDB_FILENAME "dump.rdb"
 #define REDIS_DEFAULT_REPL_DISKLESS_SYNC 0
 #define REDIS_DEFAULT_REPL_DISKLESS_SYNC_DELAY 5
+#define REDIS_DEFAULT_RDB_MMAP 0
+#define REDIS_DEFAULT_RDB_MMAP_BLOCK_SIZE (1024*1024) /* 1mb */
+#define REDIS_DEFAULT_RDB_MMAP_TRUNCATE 1
+#define REDIS_DEFAULT_RDB_MMAP_PREALLOC 0
 #define REDIS_DEFAULT_SLAVE_SERVE_STALE_DATA 1
 #define REDIS_DEFAULT_SLAVE_READ_ONLY 1
 #define REDIS_DEFAULT_REPL_DISABLE_TCP_NODELAY 0
 #define REDIS_DEFAULT_MAXMEMORY 0
 #define REDIS_DEFAULT_MAXMEMORY_SAMPLES 3
+#define REDIS_DEFAULT_PM_FILE_SIZE (1024l*1024l*1024l) /* 1gb */
+#define REDIS_DEFAULT_PM_FILE_SYNCH_MODE PM_FILE_SYNCH_MODE_MSYNCH
+#define REDIS_DEFAULT_PM_FAST_MEMCPY 0
+#define REDIS_DEFAULT_PM_ALIGN_OBJSIZE 0
 #define REDIS_DEFAULT_AOF_FILENAME "appendonly.aof"
 #define REDIS_DEFAULT_AOF_NO_FSYNC_ON_REWRITE 0
 #define REDIS_DEFAULT_AOF_LOAD_TRUNCATED 1
@@ -324,6 +333,10 @@ typedef long long mstime_t; /* millisecond time type. */
 #define AOF_FSYNC_ALWAYS 1
 #define AOF_FSYNC_EVERYSEC 2
 #define REDIS_DEFAULT_AOF_FSYNC AOF_FSYNC_EVERYSEC
+#define REDIS_DEFAULT_AOF_MMAP 0
+#define REDIS_DEFAULT_AOF_MMAP_BLOCK_SIZE (1024 * 1024) /* 1mb */
+#define REDIS_DEFAULT_AOF_MMAP_TRUNCATE 1
+#define REDIS_DEFAULT_AOF_MMAP_PREALLOC 0
 
 /* Zip structure related defaults */
 #define REDIS_HASH_MAX_ZIPLIST_ENTRIES 512
@@ -407,6 +420,10 @@ typedef long long mstime_t; /* millisecond time type. */
 #define redisAssert(_e) ((_e)?(void)0 : (_redisAssert(#_e,__FILE__,__LINE__),_exit(1)))
 #define redisPanic(_e) _redisPanic(#_e,__FILE__,__LINE__),_exit(1)
 
+#define RUN_CHECK 1
+#define DONT_RUN_CHECK 0
+
+
 /*-----------------------------------------------------------------------------
  * Data types
  *----------------------------------------------------------------------------*/
@@ -419,11 +436,15 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_LRU_CLOCK_RESOLUTION 1 /* LRU clock resolution in seconds */
 typedef struct redisObject {
     unsigned type:4;
+//    unsigned notused:1;     /* Not used */
     unsigned encoding:4;
     unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
-    int refcount;
+    unsigned onealloc:1;    /* If set then sds is allocated with redisObject*/
+   int refcount;
     void *ptr;
 } robj;
+
+
 
 /* Macro used to initialize a Redis object allocated on the stack.
  * Note that this macro is taken near the structure definition to make sure
@@ -548,7 +569,7 @@ struct sharedObjectsStruct {
     *emptymultibulk, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
     *outofrangeerr, *noscripterr, *loadingerr, *slowscripterr, *bgsaveerr,
     *masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,
-    *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
+    *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,*pmmerr,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *rpop, *lpop,
     *lpush, *emptyscan, *minstring, *maxstring,
     *select[REDIS_SHARED_SELECT_CMDS],
@@ -702,9 +723,27 @@ struct redisServer {
     int dbnum;                      /* Total number of configured DBs */
     int daemonize;                  /* True if running as a daemon */
     clientBufferLimitsConfig client_obuf_limits[REDIS_CLIENT_TYPE_COUNT];
+    /* Persistent memory */
+    char* pm_file_path;             /* Path to persistent memory file */
+    size_t pm_file_size;            /* If PM file not exist, then create new once with size, default 1gb */
+    size_t pm_file_synch_mode;      /* Mode to synchronize cache with persistent memory */
+    size_t pm_file_fault_injections;          /* Counter uses to fault injections */
+    int pm_fast_memcpy;             /* Use pmem_memcpy_nocache() */
+    int pm_align_objsize;           /* Align object (sds) size to 64B */
+    size_t sds_alignment;
+    int pm_memory_counter;			/* If True - Count each allocation/deallocation in PM memory*/
     /* AOF persistence */
     int aof_state;                  /* REDIS_AOF_(ON|OFF|WAIT_REWRITE) */
     int aof_fsync;                  /* Kind of fsync() policy */
+    int aof_mmap;                   /* Use mmap() when writing to AOF */
+    int aof_mmap_direct;            /* Write to AOF immediately, not in the event loop */
+    int aof_mmap_rewrite;           /* Do not use in-memory rewrite buffer */
+    size_t aof_mmap_block_size;     /* 1mb */
+    void *aof_mapped_ptr;           /* Pointer to mapped AOF */
+    void *aof_mapped_ptr_bak;
+    size_t aof_mapped_size;         /* Size of the mapped AOF */
+    int aof_mmap_truncate;          /* Truncate AOF to the actual size after saving */
+    int aof_mmap_prealloc;          /* Use pre-allocated AOF files */
     char *aof_filename;             /* Name of the AOF file */
     int aof_no_fsync_on_rewrite;    /* Don't fsync if a rewrite is in prog. */
     int aof_rewrite_perc;           /* Rewrite AOF if % growth is > M and... */
@@ -716,11 +755,13 @@ struct redisServer {
     list *aof_rewrite_buf_blocks;   /* Hold changes during an AOF rewrite. */
     sds aof_buf;      /* AOF buffer, written before entering the event loop */
     int aof_fd;       /* File descriptor of currently selected AOF file */
+    int aof_fd_bak;       /* File descriptor of currently selected AOF file */
     int aof_selected_db; /* Currently selected DB in AOF */
     time_t aof_flush_postponed_start; /* UNIX time of postponed AOF flush */
     time_t aof_last_fsync;            /* UNIX time of last fsync() */
     time_t aof_rewrite_time_last;   /* Time used by last AOF rewrite run. */
     time_t aof_rewrite_time_start;  /* Current AOF rewrite start time. */
+    off_t aof_rewrite_size_at_fork; /* Size of AOF when rewrite started */
     int aof_lastbgrewrite_status;   /* REDIS_OK or REDIS_ERR */
     unsigned long aof_delayed_fsync;  /* delayed AOF fsync() counter */
     int aof_rewrite_incremental_fsync;/* fsync incrementally while rewriting? */
@@ -736,6 +777,15 @@ struct redisServer {
     char *rdb_filename;             /* Name of RDB file */
     int rdb_compression;            /* Use compression in RDB? */
     int rdb_checksum;               /* Use RDB checksum? */
+    int rdb_mmap;                   /* Use mmap() when saving dump */
+    int rdb_mmap_truncate;          /* Truncate snapshot file to the actual size after saving */
+    int rdb_mmap_prealloc;          /* Use pre-allocated snapshot files */
+    int rdb_id;
+    int rdb_fd;
+    int rdb_fd_bak;
+    void *rdb_mapped_ptr;
+    void *rdb_mapped_ptr_bak;
+    size_t rdb_mmap_block_size;     /* 1mb */
     time_t lastsave;                /* Unix time of last successful save */
     time_t lastbgsave_try;          /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;      /* Time used by last RDB save run. */
@@ -1018,18 +1068,18 @@ void addReplyStatusFormat(redisClient *c, const char *fmt, ...);
 #endif
 
 /* List data type */
-void listTypeTryConversion(robj *subject, robj *value);
-void listTypePush(robj *subject, robj *value, int where);
-robj *listTypePop(robj *subject, int where);
+void listTypeTryConversion(robj *subject, robj *value, PM_TRANS trans);
+void listTypePush(robj *subject, robj *value, int where, PM_TRANS trans);
+robj *listTypePop(robj *subject, int where, PM_TRANS trans);
 unsigned long listTypeLength(robj *subject);
 listTypeIterator *listTypeInitIterator(robj *subject, long index, unsigned char direction);
 void listTypeReleaseIterator(listTypeIterator *li);
 int listTypeNext(listTypeIterator *li, listTypeEntry *entry);
 robj *listTypeGet(listTypeEntry *entry);
-void listTypeInsert(listTypeEntry *entry, robj *value, int where);
+void listTypeInsert(listTypeEntry *entry, robj *value, int where, PM_TRANS trans);
 int listTypeEqual(listTypeEntry *entry, robj *o);
-void listTypeDelete(listTypeEntry *entry);
-void listTypeConvert(robj *subject, int enc);
+void listTypeDelete(listTypeEntry *entry, PM_TRANS trans);
+void listTypeConvert(robj *subject, int enc, PM_TRANS trans);
 void unblockClientWaitingData(redisClient *c);
 void handleClientsBlockedOnLists(void);
 void popGenericCommand(redisClient *c, int where);
@@ -1046,31 +1096,33 @@ void discardTransaction(redisClient *c);
 void flagTransaction(redisClient *c);
 
 /* Redis object implementation */
-void decrRefCount(robj *o);
-void decrRefCountVoid(void *o);
-void incrRefCount(robj *o);
+void decrRefCount(robj *o, PM_TRANS trans);
+void decrRefCountVoid(void *o, PM_TRANS trans);
+void incrRefCount(robj *o, PM_TRANS trans);
 robj *resetRefCount(robj *obj);
-void freeStringObject(robj *o);
-void freeListObject(robj *o);
-void freeSetObject(robj *o);
-void freeZsetObject(robj *o);
-void freeHashObject(robj *o);
-robj *createObject(int type, void *ptr);
-robj *createStringObject(char *ptr, size_t len);
-robj *dupStringObject(robj *o);
+void freeStringObject(robj *o, PM_TRANS trans);
+void freeListObject(robj *o, PM_TRANS trans);
+void freeSetObject(robj *o, PM_TRANS trans);
+void freeZsetObject(robj *o, PM_TRANS trans);
+void freeHashObject(robj *o, PM_TRANS trans);
+robj *createObject(int type, void *ptr, PM_TRANS trans);
+robj *createStringObject(char *ptr, size_t len, PM_TRANS trans);
+size_t getObjectSize(robj *o);
+robj *createValObject(robj *o, PM_TRANS trans);
+robj *dupStringObject(robj *o, PM_TRANS trans);
 int isObjectRepresentableAsLongLong(robj *o, long long *llongval);
-robj *tryObjectEncoding(robj *o);
-robj *getDecodedObject(robj *o);
+robj *tryObjectEncoding(robj *o, PM_TRANS trans);
+robj *getDecodedObject(robj *o, PM_TRANS trans);
 size_t stringObjectLen(robj *o);
-robj *createStringObjectFromLongLong(long long value);
-robj *createStringObjectFromLongDouble(long double value, int humanfriendly);
-robj *createListObject(void);
-robj *createZiplistObject(void);
-robj *createSetObject(void);
-robj *createIntsetObject(void);
-robj *createHashObject(void);
-robj *createZsetObject(void);
-robj *createZsetZiplistObject(void);
+robj *createStringObjectFromLongLong(long long value, PM_TRANS trans);
+robj *createStringObjectFromLongDouble(long double value, int humanfriendly, PM_TRANS trans);
+robj *createListObject(PM_TRANS trans);
+robj *createZiplistObject(PM_TRANS trans);
+robj *createSetObject(PM_TRANS trans);
+robj *createIntsetObject(PM_TRANS trans);
+robj *createHashObject(PM_TRANS trans);
+robj *createZsetObject(PM_TRANS trans);
+robj *createZsetZiplistObject(PM_TRANS trans);
 int getLongFromObjectOrReply(redisClient *c, robj *o, long *target, const char *msg);
 int checkType(redisClient *c, robj *o, int type);
 int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, const char *msg);
@@ -1123,11 +1175,18 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
 void aofRemoveTempFile(pid_t childpid);
 int rewriteAppendOnlyFileBackground(void);
 int loadAppendOnlyFile(char *filename);
+int loadMappedAppendOnlyFile();
 void stopAppendOnly(void);
 int startAppendOnly(void);
 void backgroundRewriteDoneHandler(int exitcode, int bysignal);
 void aofRewriteBufferReset(void);
 unsigned long aofRewriteBufferSize(void);
+void aofUpdateCurrentSize(void);
+
+void openAppendOnlyFile(void);
+int closeAppendOnlyFile();
+int extendAppendOnlyFile(int aof_fd, void **aof_mapped_ptr, size_t *aof_mapped_size, size_t aof_new_size);
+
 
 /* Sorted sets data type */
 
@@ -1143,17 +1202,17 @@ typedef struct {
     int minex, maxex; /* are min or max exclusive? */
 } zlexrangespec;
 
-zskiplist *zslCreate(void);
-void zslFree(zskiplist *zsl);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj);
-unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score);
-int zslDelete(zskiplist *zsl, double score, robj *obj);
+zskiplist *zslCreate(PM_TRANS trans);
+void zslFree(zskiplist *zsl, PM_TRANS trans);
+zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj, PM_TRANS trans);
+unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score, PM_TRANS trans);
+int zslDelete(zskiplist *zsl, double score, robj *obj, PM_TRANS trans);
 zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range);
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 unsigned int zsetLength(robj *zobj);
-void zsetConvert(robj *zobj, int encoding);
+void zsetConvert(robj *zobj, int encoding, PM_TRANS trans);
 
 /* Core functions */
 int freeMemoryIfNeeded(void);
@@ -1187,26 +1246,26 @@ void updateCachedTime(void);
 void resetServerStats(void);
 
 /* Set data type */
-robj *setTypeCreate(robj *value);
-int setTypeAdd(robj *subject, robj *value);
+robj *setTypeCreate(robj *value, PM_TRANS trans);
+int setTypeAdd(robj *subject, robj *value, PM_TRANS trans);
 int setTypeRemove(robj *subject, robj *value);
 int setTypeIsMember(robj *subject, robj *value);
 setTypeIterator *setTypeInitIterator(robj *subject);
 void setTypeReleaseIterator(setTypeIterator *si);
 int setTypeNext(setTypeIterator *si, robj **objele, int64_t *llele);
-robj *setTypeNextObject(setTypeIterator *si);
+robj *setTypeNextObject(setTypeIterator *si, PM_TRANS trans);
 int setTypeRandomElement(robj *setobj, robj **objele, int64_t *llele);
 unsigned long setTypeSize(robj *subject);
-void setTypeConvert(robj *subject, int enc);
+void setTypeConvert(robj *subject, int enc, PM_TRANS trans);
 
 /* Hash data type */
-void hashTypeConvert(robj *o, int enc);
-void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
-void hashTypeTryObjectEncoding(robj *subject, robj **o1, robj **o2);
-robj *hashTypeGetObject(robj *o, robj *key);
-int hashTypeExists(robj *o, robj *key);
-int hashTypeSet(robj *o, robj *key, robj *value);
-int hashTypeDelete(robj *o, robj *key);
+void hashTypeConvert(robj *o, int enc, PM_TRANS trans);
+void hashTypeTryConversion(robj *subject, robj **argv, int start, int end, PM_TRANS trans);
+void hashTypeTryObjectEncoding(robj *subject, robj **o1, robj **o2, PM_TRANS trans);
+robj *hashTypeGetObject(robj *o, robj *key, PM_TRANS trans);
+int hashTypeExists(robj *o, robj *key, PM_TRANS trans);
+int hashTypeSet(robj *o, robj *key, robj *value, PM_TRANS trans);
+int hashTypeDelete(robj *o, robj *key, PM_TRANS trans);
 unsigned long hashTypeLength(robj *o);
 hashTypeIterator *hashTypeInitIterator(robj *subject);
 void hashTypeReleaseIterator(hashTypeIterator *hi);
@@ -1216,13 +1275,13 @@ void hashTypeCurrentFromZiplist(hashTypeIterator *hi, int what,
                                 unsigned int *vlen,
                                 long long *vll);
 void hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, robj **dst);
-robj *hashTypeCurrentObject(hashTypeIterator *hi, int what);
-robj *hashTypeLookupWriteOrCreate(redisClient *c, robj *key);
+robj *hashTypeCurrentObject(hashTypeIterator *hi, int what, PM_TRANS trans);
+robj *hashTypeLookupWriteOrCreate(redisClient *c, robj *key, PM_TRANS trans);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(redisClient *c, int notify);
 int pubsubUnsubscribeAllPatterns(redisClient *c, int notify);
-void freePubsubPattern(void *p);
+void freePubsubPattern(void *p, PM_TRANS trans);
 int listMatchPubsubPattern(void *a, void *b);
 int pubsubPublishMessage(robj *channel, robj *message);
 
@@ -1250,13 +1309,13 @@ robj *lookupKeyRead(redisDb *db, robj *key);
 robj *lookupKeyWrite(redisDb *db, robj *key);
 robj *lookupKeyReadOrReply(redisClient *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(redisClient *c, robj *key, robj *reply);
-void dbAdd(redisDb *db, robj *key, robj *val);
-void dbOverwrite(redisDb *db, robj *key, robj *val);
-void setKey(redisDb *db, robj *key, robj *val);
+void dbAdd(redisDb *db, robj *key, robj *val, PM_TRANS trans);
+void dbOverwrite(redisDb *db, robj *key, robj *val, PM_TRANS trans);
+void setKey(redisDb *db, robj *key, robj *val, PM_TRANS trans);
 int dbExists(redisDb *db, robj *key);
 robj *dbRandomKey(redisDb *db);
 int dbDelete(redisDb *db, robj *key);
-robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o);
+robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o, PM_TRANS trans);
 long long emptyDb(void(callback)(void*));
 int selectDb(redisClient *c, int id);
 void signalModifiedKey(redisDb *db, robj *key);
@@ -1468,5 +1527,26 @@ void redisLogHexDump(int level, char *descr, void *value, size_t len);
     printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define redisDebugMark() \
     printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
+
+
+#define PAGE_SIZE   4096
+
+/* Aligned msync() */
+static inline
+int redisMsync(void *addr, size_t len, int flags)
+{
+    uint64_t uptr;
+
+    /* increase len by the amount we gain when we round addr down */
+    len += (uint64_t)addr & (PAGE_SIZE - 1);
+
+    /* round addr down to page (4K) boundary */
+    uptr = (uint64_t)addr & ~(PAGE_SIZE - 1);
+
+    /* round len up to multiple of page size */
+    len = (len + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
+
+    return msync((void *)uptr, len, flags);
+}
 
 #endif

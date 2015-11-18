@@ -51,50 +51,111 @@
 
 #include "redis.h"
 #include <math.h>
+#include "pm.h"
+//#include "pmem.h"
 
 static int zslLexValueGteMin(robj *value, zlexrangespec *spec);
 static int zslLexValueLteMax(robj *value, zlexrangespec *spec);
 
-zskiplistNode *zslCreateNode(int level, double score, robj *obj) {
-    zskiplistNode *zn = zmalloc(sizeof(*zn)+level*sizeof(struct zskiplistLevel));
+
+zskiplistNode *zslCreateNode(int level, double score, robj *obj, PM_TRANS trans) {
+    zskiplistNode *zn = NULL;
+    size_t size = sizeof(*zn)+level*sizeof(struct zskiplistLevel);
+    if(PM_TRANS_RAM!=trans)
+    {
+        zn = pm_trans_alloc(trans, size, PM_TAG_ALLOC_UNKN,NULL);
+    }
+    else
+    {
+        zn = zmalloc(size);
+    }
+
     zn->score = score;
     zn->obj = obj;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,zn, size);
+    }
     return zn;
 }
 
-zskiplist *zslCreate(void) {
+zskiplist *zslCreate(PM_TRANS trans) {
     int j;
     zskiplist *zsl;
-
-    zsl = zmalloc(sizeof(*zsl));
+    if(PM_TRANS_RAM!=trans)
+    {
+        zsl = pm_trans_alloc(trans, sizeof(*zsl), PM_TAG_ALLOC_UNKN,NULL);
+    }
+    else
+    {
+        zsl = zmalloc(sizeof(*zsl));
+    }
     zsl->level = 1;
     zsl->length = 0;
-    zsl->header = zslCreateNode(ZSKIPLIST_MAXLEVEL,0,NULL);
+    zsl->header = zslCreateNode(ZSKIPLIST_MAXLEVEL,0,NULL,trans);
     for (j = 0; j < ZSKIPLIST_MAXLEVEL; j++) {
         zsl->header->level[j].forward = NULL;
         zsl->header->level[j].span = 0;
+        if(PM_TRANS_RAM!=trans)
+        {
+        	pmemobj_persist(trans,&zsl->header->level[j], sizeof(zsl->header->level[j]));
+        }
     }
     zsl->header->backward = NULL;
     zsl->tail = NULL;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,zsl, sizeof(*zsl));
+    }
     return zsl;
 }
 
-void zslFreeNode(zskiplistNode *node) {
-    decrRefCount(node->obj);
-    zfree(node);
-}
-
-void zslFree(zskiplist *zsl) {
-    zskiplistNode *node = zsl->header->level[0].forward, *next;
-
-    zfree(zsl->header);
-    while(node) {
-        next = node->level[0].forward;
-        zslFreeNode(node);
-        node = next;
+void zslFreeNode(zskiplistNode *node, PM_TRANS trans) {
+    if(PM_TRANS_RAM!=trans)
+    {
+        decrRefCount(node->obj, trans);
+        pm_trans_free(trans, node);
     }
-    zfree(zsl);
+    else
+    {
+        decrRefCount(node->obj, trans);
+        zfree(node);
+    }
 }
+
+void zslFree(zskiplist *zsl, PM_TRANS trans) {
+    zskiplistNode **node = &(zsl->header->level[0].forward), *next;
+    if(PM_TRANS_RAM!=trans)
+    {
+        pm_trans_free(trans, zsl->header);
+    }
+    else
+    {
+        zfree(zsl->header);
+    }
+    while(*node) {
+        next = (*node)->level[0].forward;
+        zslFreeNode(*node, trans);
+        if(PM_TRANS_RAM!=trans)
+        {
+            pm_trans_set(trans, (void**)node, next);
+        }
+        else
+        {
+            *node = next;
+        }
+    }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        pm_trans_free(trans, zsl);
+    }
+    else
+    {
+        zfree(zsl);
+    }
+}
+
 
 /* Returns a random level for the new skiplist node we are going to create.
  * The return value of this function is between 1 and ZSKIPLIST_MAXLEVEL
@@ -107,7 +168,7 @@ int zslRandomLevel(void) {
     return (level<ZSKIPLIST_MAXLEVEL) ? level : ZSKIPLIST_MAXLEVEL;
 }
 
-zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
+zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj, PM_TRANS trans) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned int rank[ZSKIPLIST_MAXLEVEL];
     int i, level;
@@ -139,7 +200,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
         }
         zsl->level = level;
     }
-    x = zslCreateNode(level,score,obj);
+    x = zslCreateNode(level,score,obj,trans);
     for (i = 0; i < level; i++) {
         x->level[i].forward = update[i]->level[i].forward;
         update[i]->level[i].forward = x;
@@ -185,7 +246,7 @@ void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
 }
 
 /* Delete an element with matching score/object from the skiplist. */
-int zslDelete(zskiplist *zsl, double score, robj *obj) {
+int zslDelete(zskiplist *zsl, double score, robj *obj, PM_TRANS trans) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     int i;
 
@@ -203,7 +264,7 @@ int zslDelete(zskiplist *zsl, double score, robj *obj) {
     x = x->level[0].forward;
     if (x && score == x->score && equalStringObjects(x->obj,obj)) {
         zslDeleteNode(zsl, x, update);
-        zslFreeNode(x);
+        zslFreeNode(x,trans);
         return 1;
     }
     return 0; /* not found */
@@ -289,7 +350,7 @@ zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range) {
  * Min and max are inclusive, so a score >= min || score <= max is deleted.
  * Note that this function takes the reference to the hash table view of the
  * sorted set, in order to remove the elements from the hash table too. */
-unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, dict *dict) {
+unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, dict *dict,PM_TRANS trans) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
     int i;
@@ -313,14 +374,14 @@ unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, dict *dic
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl,x,update);
         dictDelete(dict,x->obj);
-        zslFreeNode(x);
+        zslFreeNode(x,trans);
         removed++;
         x = next;
     }
     return removed;
 }
 
-unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, dict *dict) {
+unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, dict *dict, PM_TRANS trans) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
     int i;
@@ -342,7 +403,7 @@ unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, dict *di
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl,x,update);
         dictDelete(dict,x->obj);
-        zslFreeNode(x);
+        zslFreeNode(x,trans);
         removed++;
         x = next;
     }
@@ -351,7 +412,7 @@ unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, dict *di
 
 /* Delete all the elements with rank between start and end from the skiplist.
  * Start and end are inclusive. Note that start and end need to be 1-based */
-unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, dict *dict) {
+unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, dict *dict, PM_TRANS trans) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
     int i;
@@ -371,7 +432,7 @@ unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned 
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl,x,update);
         dictDelete(dict,x->obj);
-        zslFreeNode(x);
+        zslFreeNode(x, trans);
         removed++;
         traversed++;
         x = next;
@@ -486,21 +547,21 @@ int zslParseLexRangeItem(robj *item, robj **dest, int *ex) {
         if (c[1] != '\0') return REDIS_ERR;
         *ex = 0;
         *dest = shared.maxstring;
-        incrRefCount(shared.maxstring);
+        incrRefCount(shared.maxstring,PM_TRANS_RAM);
         return REDIS_OK;
     case '-':
         if (c[1] != '\0') return REDIS_ERR;
         *ex = 0;
         *dest = shared.minstring;
-        incrRefCount(shared.minstring);
+        incrRefCount(shared.minstring,PM_TRANS_RAM);
         return REDIS_OK;
     case '(':
         *ex = 1;
-        *dest = createStringObject(c+1,sdslen(c)-1);
+        *dest = createStringObject(c+1,sdslen(c)-1,PM_TRANS_RAM);
         return REDIS_OK;
     case '[':
         *ex = 0;
-        *dest = createStringObject(c+1,sdslen(c)-1);
+        *dest = createStringObject(c+1,sdslen(c)-1,PM_TRANS_RAM);
         return REDIS_OK;
     default:
         return REDIS_ERR;
@@ -521,8 +582,8 @@ static int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
     spec->min = spec->max = NULL;
     if (zslParseLexRangeItem(min, &spec->min, &spec->minex) == REDIS_ERR ||
         zslParseLexRangeItem(max, &spec->max, &spec->maxex) == REDIS_ERR) {
-        if (spec->min) decrRefCount(spec->min);
-        if (spec->max) decrRefCount(spec->max);
+        if (spec->min) decrRefCount(spec->min,PM_TRANS_RAM);
+        if (spec->max) decrRefCount(spec->max,PM_TRANS_RAM);
         return REDIS_ERR;
     } else {
         return REDIS_OK;
@@ -532,8 +593,8 @@ static int zslParseLexRange(robj *min, robj *max, zlexrangespec *spec) {
 /* Free a lex range structure, must be called only after zelParseLexRange()
  * populated the structure with success (REDIS_OK returned). */
 void zslFreeLexRange(zlexrangespec *spec) {
-    decrRefCount(spec->min);
-    decrRefCount(spec->max);
+    decrRefCount(spec->min,PM_TRANS_RAM);
+    decrRefCount(spec->max,PM_TRANS_RAM);
 }
 
 /* This is just a wrapper to compareStringObjects() that is able to
@@ -665,9 +726,9 @@ robj *ziplistGetObject(unsigned char *sptr) {
     redisAssert(ziplistGet(sptr,&vstr,&vlen,&vlong));
 
     if (vstr) {
-        return createStringObject((char*)vstr,vlen);
+        return createStringObject((char*)vstr,vlen,PM_TRANS_RAM);
     } else {
-        return createStringObjectFromLongLong(vlong);
+        return createStringObjectFromLongLong(vlong,PM_TRANS_RAM);
     }
 }
 
@@ -824,14 +885,14 @@ unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range) {
 static int zzlLexValueGteMin(unsigned char *p, zlexrangespec *spec) {
     robj *value = ziplistGetObject(p);
     int res = zslLexValueGteMin(value,spec);
-    decrRefCount(value);
+    decrRefCount(value,PM_TRANS_RAM);
     return res;
 }
 
 static int zzlLexValueLteMax(unsigned char *p, zlexrangespec *spec) {
     robj *value = ziplistGetObject(p);
     int res = zslLexValueLteMax(value,spec);
-    decrRefCount(value);
+    decrRefCount(value,PM_TRANS_RAM);
     return res;
 }
 
@@ -912,10 +973,10 @@ unsigned char *zzlLastInLexRange(unsigned char *zl, zlexrangespec *range) {
     return NULL;
 }
 
-unsigned char *zzlFind(unsigned char *zl, robj *ele, double *score) {
+unsigned char *zzlFind(unsigned char *zl, robj *ele, double *score, PM_TRANS trans) {
     unsigned char *eptr = ziplistIndex(zl,0), *sptr;
 
-    ele = getDecodedObject(ele);
+    ele = getDecodedObject(ele,trans);
     while (eptr != NULL) {
         sptr = ziplistNext(zl,eptr);
         redisAssertWithInfo(NULL,ele,sptr != NULL);
@@ -923,7 +984,7 @@ unsigned char *zzlFind(unsigned char *zl, robj *ele, double *score) {
         if (ziplistCompare(eptr,ele->ptr,sdslen(ele->ptr))) {
             /* Matching element, pull out score. */
             if (score != NULL) *score = zzlGetScore(sptr);
-            decrRefCount(ele);
+            decrRefCount(ele,trans);
             return eptr;
         }
 
@@ -931,22 +992,22 @@ unsigned char *zzlFind(unsigned char *zl, robj *ele, double *score) {
         eptr = ziplistNext(zl,sptr);
     }
 
-    decrRefCount(ele);
+    decrRefCount(ele,trans);
     return NULL;
 }
 
 /* Delete (element,score) pair from ziplist. Use local copy of eptr because we
  * don't want to modify the one given as argument. */
-unsigned char *zzlDelete(unsigned char *zl, unsigned char *eptr) {
+unsigned char *zzlDelete(unsigned char *zl, unsigned char *eptr, PM_TRANS trans) {
     unsigned char *p = eptr;
 
     /* TODO: add function to ziplist API to delete N elements from offset. */
-    zl = ziplistDelete(zl,&p);
-    zl = ziplistDelete(zl,&p);
+    zl = ziplistDelete(zl,&p,trans);
+    zl = ziplistDelete(zl,&p,trans);
     return zl;
 }
 
-unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, robj *ele, double score) {
+unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, robj *ele, double score, PM_TRANS trans) {
     unsigned char *sptr;
     char scorebuf[128];
     int scorelen;
@@ -955,17 +1016,17 @@ unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, robj *ele, do
     redisAssertWithInfo(NULL,ele,ele->encoding == REDIS_ENCODING_RAW);
     scorelen = d2string(scorebuf,sizeof(scorebuf),score);
     if (eptr == NULL) {
-        zl = ziplistPush(zl,ele->ptr,sdslen(ele->ptr),ZIPLIST_TAIL);
-        zl = ziplistPush(zl,(unsigned char*)scorebuf,scorelen,ZIPLIST_TAIL);
+        zl = ziplistPush(zl,ele->ptr,sdslen(ele->ptr),ZIPLIST_TAIL,trans);
+        zl = ziplistPush(zl,(unsigned char*)scorebuf,scorelen,ZIPLIST_TAIL,trans);
     } else {
         /* Keep offset relative to zl, as it might be re-allocated. */
         offset = eptr-zl;
-        zl = ziplistInsert(zl,eptr,ele->ptr,sdslen(ele->ptr));
+        zl = ziplistInsert(zl,eptr,ele->ptr,sdslen(ele->ptr),trans);
         eptr = zl+offset;
 
         /* Insert score after the element. */
         redisAssertWithInfo(NULL,ele,(sptr = ziplistNext(zl,eptr)) != NULL);
-        zl = ziplistInsert(zl,sptr,(unsigned char*)scorebuf,scorelen);
+        zl = ziplistInsert(zl,sptr,(unsigned char*)scorebuf,scorelen,trans);
     }
 
     return zl;
@@ -973,11 +1034,11 @@ unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, robj *ele, do
 
 /* Insert (element,score) pair in ziplist. This function assumes the element is
  * not yet present in the list. */
-unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score) {
+unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score, PM_TRANS trans) {
     unsigned char *eptr = ziplistIndex(zl,0), *sptr;
     double s;
 
-    ele = getDecodedObject(ele);
+    ele = getDecodedObject(ele,trans);
     while (eptr != NULL) {
         sptr = ziplistNext(zl,eptr);
         redisAssertWithInfo(NULL,ele,sptr != NULL);
@@ -987,12 +1048,12 @@ unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score) {
             /* First element with score larger than score for element to be
              * inserted. This means we should take its spot in the list to
              * maintain ordering. */
-            zl = zzlInsertAt(zl,eptr,ele,score);
+            zl = zzlInsertAt(zl,eptr,ele,score,trans);
             break;
         } else if (s == score) {
             /* Ensure lexicographical ordering for elements. */
             if (zzlCompareElements(eptr,ele->ptr,sdslen(ele->ptr)) > 0) {
-                zl = zzlInsertAt(zl,eptr,ele,score);
+                zl = zzlInsertAt(zl,eptr,ele,score,trans);
                 break;
             }
         }
@@ -1003,13 +1064,13 @@ unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score) {
 
     /* Push on tail of list when it was not yet inserted. */
     if (eptr == NULL)
-        zl = zzlInsertAt(zl,NULL,ele,score);
+        zl = zzlInsertAt(zl,NULL,ele,score,trans);
 
-    decrRefCount(ele);
+    decrRefCount(ele,trans);
     return zl;
 }
 
-unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range, unsigned long *deleted) {
+unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range, unsigned long *deleted, PM_TRANS trans) {
     unsigned char *eptr, *sptr;
     double score;
     unsigned long num = 0;
@@ -1025,8 +1086,8 @@ unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range, unsig
         score = zzlGetScore(sptr);
         if (zslValueLteMax(score,range)) {
             /* Delete both the element and the score. */
-            zl = ziplistDelete(zl,&eptr);
-            zl = ziplistDelete(zl,&eptr);
+            zl = ziplistDelete(zl,&eptr,trans);
+            zl = ziplistDelete(zl,&eptr,trans);
             num++;
         } else {
             /* No longer in range. */
@@ -1038,7 +1099,7 @@ unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range, unsig
     return zl;
 }
 
-unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *range, unsigned long *deleted) {
+unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *range, unsigned long *deleted,PM_TRANS trans) {
     unsigned char *eptr, *sptr;
     unsigned long num = 0;
 
@@ -1052,8 +1113,8 @@ unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *range, unsi
     while ((sptr = ziplistNext(zl,eptr)) != NULL) {
         if (zzlLexValueLteMax(eptr,range)) {
             /* Delete both the element and the score. */
-            zl = ziplistDelete(zl,&eptr);
-            zl = ziplistDelete(zl,&eptr);
+            zl = ziplistDelete(zl,&eptr,trans);
+            zl = ziplistDelete(zl,&eptr,trans);
             num++;
         } else {
             /* No longer in range. */
@@ -1067,10 +1128,10 @@ unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *range, unsi
 
 /* Delete all the elements with rank between start and end from the skiplist.
  * Start and end are inclusive. Note that start and end need to be 1-based */
-unsigned char *zzlDeleteRangeByRank(unsigned char *zl, unsigned int start, unsigned int end, unsigned long *deleted) {
+unsigned char *zzlDeleteRangeByRank(unsigned char *zl, unsigned int start, unsigned int end, unsigned long *deleted, PM_TRANS trans) {
     unsigned int num = (end-start)+1;
     if (deleted) *deleted = num;
-    zl = ziplistDeleteRange(zl,2*(start-1),2*num);
+    zl = ziplistDeleteRange(zl,2*(start-1),2*num, trans);
     return zl;
 }
 
@@ -1090,7 +1151,7 @@ unsigned int zsetLength(robj *zobj) {
     return length;
 }
 
-void zsetConvert(robj *zobj, int encoding) {
+void zsetConvert(robj *zobj, int encoding, PM_TRANS trans) {
     zset *zs;
     zskiplistNode *node, *next;
     robj *ele;
@@ -1109,7 +1170,7 @@ void zsetConvert(robj *zobj, int encoding) {
 
         zs = zmalloc(sizeof(*zs));
         zs->dict = dictCreate(&zsetDictType,NULL);
-        zs->zsl = zslCreate();
+        zs->zsl = zslCreate(trans);
 
         eptr = ziplistIndex(zl,0);
         redisAssertWithInfo(NULL,zobj,eptr != NULL);
@@ -1120,14 +1181,14 @@ void zsetConvert(robj *zobj, int encoding) {
             score = zzlGetScore(sptr);
             redisAssertWithInfo(NULL,zobj,ziplistGet(eptr,&vstr,&vlen,&vlong));
             if (vstr == NULL)
-                ele = createStringObjectFromLongLong(vlong);
+                ele = createStringObjectFromLongLong(vlong,trans);
             else
-                ele = createStringObject((char*)vstr,vlen);
+                ele = createStringObject((char*)vstr,vlen,trans);
 
             /* Has incremented refcount since it was just created. */
-            node = zslInsert(zs->zsl,score,ele);
-            redisAssertWithInfo(NULL,zobj,dictAdd(zs->dict,ele,&node->score) == DICT_OK);
-            incrRefCount(ele); /* Added to dictionary. */
+            node = zslInsert(zs->zsl,score,ele,trans);
+            redisAssertWithInfo(NULL,zobj,dictAdd(zs->dict,ele,&node->score,trans) == DICT_OK);
+            incrRefCount(ele,trans); /* Added to dictionary. */
             zzlNext(zl,&eptr,&sptr);
         }
 
@@ -1135,7 +1196,7 @@ void zsetConvert(robj *zobj, int encoding) {
         zobj->ptr = zs;
         zobj->encoding = REDIS_ENCODING_SKIPLIST;
     } else if (zobj->encoding == REDIS_ENCODING_SKIPLIST) {
-        unsigned char *zl = ziplistNew();
+        unsigned char *zl = ziplistNew(trans);
 
         if (encoding != REDIS_ENCODING_ZIPLIST)
             redisPanic("Unknown target encoding");
@@ -1149,12 +1210,12 @@ void zsetConvert(robj *zobj, int encoding) {
         zfree(zs->zsl);
 
         while (node) {
-            ele = getDecodedObject(node->obj);
-            zl = zzlInsertAt(zl,NULL,ele,node->score);
-            decrRefCount(ele);
+            ele = getDecodedObject(node->obj,trans);
+            zl = zzlInsertAt(zl,NULL,ele,node->score,trans);
+            decrRefCount(ele,trans);
 
             next = node->level[0].forward;
-            zslFreeNode(node);
+            zslFreeNode(node,trans);
             node = next;
         }
 
@@ -1186,6 +1247,13 @@ void zaddGenericCommand(redisClient *c, int incr) {
         return;
     }
 
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     /* Start parsing all the scores, we need to emit any syntax error
      * before executing additions to the sorted set, as the command should
      * either execute fully or nothing at all. */
@@ -1201,11 +1269,11 @@ void zaddGenericCommand(redisClient *c, int incr) {
         if (server.zset_max_ziplist_entries == 0 ||
             server.zset_max_ziplist_value < sdslen(c->argv[3]->ptr))
         {
-            zobj = createZsetObject();
+            zobj = createZsetObject(trans);
         } else {
-            zobj = createZsetZiplistObject();
+            zobj = createZsetZiplistObject(trans);
         }
-        dbAdd(c->db,key,zobj);
+        dbAdd(c->db,key,zobj, trans);
     } else {
         if (zobj->type != REDIS_ZSET) {
             addReply(c,shared.wrongtypeerr);
@@ -1221,7 +1289,7 @@ void zaddGenericCommand(redisClient *c, int incr) {
 
             /* Prefer non-encoded element when dealing with ziplists. */
             ele = c->argv[3+j*2];
-            if ((eptr = zzlFind(zobj->ptr,ele,&curscore)) != NULL) {
+            if ((eptr = zzlFind(zobj->ptr,ele,&curscore,trans)) != NULL) {
                 if (incr) {
                     score += curscore;
                     if (isnan(score)) {
@@ -1232,19 +1300,19 @@ void zaddGenericCommand(redisClient *c, int incr) {
 
                 /* Remove and re-insert when score changed. */
                 if (score != curscore) {
-                    zobj->ptr = zzlDelete(zobj->ptr,eptr);
-                    zobj->ptr = zzlInsert(zobj->ptr,ele,score);
+                    zobj->ptr = zzlDelete(zobj->ptr,eptr,trans);
+                    zobj->ptr = zzlInsert(zobj->ptr,ele,score,trans);
                     server.dirty++;
                     updated++;
                 }
             } else {
                 /* Optimize: check if the element is too large or the list
                  * becomes too long *before* executing zzlInsert. */
-                zobj->ptr = zzlInsert(zobj->ptr,ele,score);
+                zobj->ptr = zzlInsert(zobj->ptr,ele,score,trans);
                 if (zzlLength(zobj->ptr) > server.zset_max_ziplist_entries)
-                    zsetConvert(zobj,REDIS_ENCODING_SKIPLIST);
+                    zsetConvert(zobj,REDIS_ENCODING_SKIPLIST,trans);
                 if (sdslen(ele->ptr) > server.zset_max_ziplist_value)
-                    zsetConvert(zobj,REDIS_ENCODING_SKIPLIST);
+                    zsetConvert(zobj,REDIS_ENCODING_SKIPLIST,trans);
                 server.dirty++;
                 added++;
             }
@@ -1253,7 +1321,7 @@ void zaddGenericCommand(redisClient *c, int incr) {
             zskiplistNode *znode;
             dictEntry *de;
 
-            ele = c->argv[3+j*2] = tryObjectEncoding(c->argv[3+j*2]);
+            ele = c->argv[3+j*2] = tryObjectEncoding(c->argv[3+j*2],trans);
             de = dictFind(zs->dict,ele);
             if (de != NULL) {
                 curobj = dictGetKey(de);
@@ -1273,18 +1341,18 @@ void zaddGenericCommand(redisClient *c, int incr) {
                  * delete the key object from the skiplist, since the
                  * dictionary still has a reference to it. */
                 if (score != curscore) {
-                    redisAssertWithInfo(c,curobj,zslDelete(zs->zsl,curscore,curobj));
-                    znode = zslInsert(zs->zsl,score,curobj);
-                    incrRefCount(curobj); /* Re-inserted in skiplist. */
+                    redisAssertWithInfo(c,curobj,zslDelete(zs->zsl,curscore,curobj,trans));
+                    znode = zslInsert(zs->zsl,score,curobj,trans);
+                    incrRefCount(curobj,trans); /* Re-inserted in skiplist. */
                     dictGetVal(de) = &znode->score; /* Update score ptr. */
                     server.dirty++;
                     updated++;
                 }
             } else {
-                znode = zslInsert(zs->zsl,score,ele);
-                incrRefCount(ele); /* Inserted in skiplist. */
-                redisAssertWithInfo(c,NULL,dictAdd(zs->dict,ele,&znode->score) == DICT_OK);
-                incrRefCount(ele); /* Added to dictionary. */
+                znode = zslInsert(zs->zsl,score,ele,trans);
+                incrRefCount(ele,trans); /* Inserted in skiplist. */
+                redisAssertWithInfo(c,NULL,dictAdd(zs->dict,ele,&znode->score,trans) == DICT_OK);
+                incrRefCount(ele,trans); /* Added to dictionary. */
                 server.dirty++;
                 added++;
             }
@@ -1299,6 +1367,13 @@ void zaddGenericCommand(redisClient *c, int incr) {
 
 cleanup:
     zfree(scores);
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
+
     if (added || updated) {
         signalModifiedKey(c->db,key);
         notifyKeyspaceEvent(REDIS_NOTIFY_ZSET,
@@ -1322,13 +1397,20 @@ void zremCommand(redisClient *c) {
     if ((zobj = lookupKeyWriteOrReply(c,key,shared.czero)) == NULL ||
         checkType(c,zobj,REDIS_ZSET)) return;
 
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     if (zobj->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *eptr;
 
         for (j = 2; j < c->argc; j++) {
-            if ((eptr = zzlFind(zobj->ptr,c->argv[j],NULL)) != NULL) {
+            if ((eptr = zzlFind(zobj->ptr,c->argv[j],NULL,trans)) != NULL) {
                 deleted++;
-                zobj->ptr = zzlDelete(zobj->ptr,eptr);
+                zobj->ptr = zzlDelete(zobj->ptr,eptr,trans);
                 if (zzlLength(zobj->ptr) == 0) {
                     dbDelete(c->db,key);
                     keyremoved = 1;
@@ -1336,6 +1418,7 @@ void zremCommand(redisClient *c) {
                 }
             }
         }
+
     } else if (zobj->encoding == REDIS_ENCODING_SKIPLIST) {
         zset *zs = zobj->ptr;
         dictEntry *de;
@@ -1348,7 +1431,7 @@ void zremCommand(redisClient *c) {
 
                 /* Delete from the skiplist */
                 score = *(double*)dictGetVal(de);
-                redisAssertWithInfo(c,c->argv[j],zslDelete(zs->zsl,score,c->argv[j]));
+                redisAssertWithInfo(c,c->argv[j],zslDelete(zs->zsl,score,c->argv[j],trans));
 
                 /* Delete from the hash table */
                 dictDelete(zs->dict,c->argv[j]);
@@ -1362,6 +1445,12 @@ void zremCommand(redisClient *c) {
         }
     } else {
         redisPanic("Unknown sorted set encoding");
+    }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
     }
 
     if (deleted) {
@@ -1405,6 +1494,13 @@ void zremrangeGenericCommand(redisClient *c, int rangetype) {
     }
 
     /* Step 2: Lookup & range sanity checks if needed. */
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
     if ((zobj = lookupKeyWriteOrReply(c,key,shared.czero)) == NULL ||
         checkType(c,zobj,REDIS_ZSET)) goto cleanup;
 
@@ -1428,13 +1524,13 @@ void zremrangeGenericCommand(redisClient *c, int rangetype) {
     if (zobj->encoding == REDIS_ENCODING_ZIPLIST) {
         switch(rangetype) {
         case ZRANGE_RANK:
-            zobj->ptr = zzlDeleteRangeByRank(zobj->ptr,start+1,end+1,&deleted);
+            zobj->ptr = zzlDeleteRangeByRank(zobj->ptr,start+1,end+1,&deleted,trans);
             break;
         case ZRANGE_SCORE:
-            zobj->ptr = zzlDeleteRangeByScore(zobj->ptr,&range,&deleted);
+            zobj->ptr = zzlDeleteRangeByScore(zobj->ptr,&range,&deleted,trans);
             break;
         case ZRANGE_LEX:
-            zobj->ptr = zzlDeleteRangeByLex(zobj->ptr,&lexrange,&deleted);
+            zobj->ptr = zzlDeleteRangeByLex(zobj->ptr,&lexrange,&deleted,trans);
             break;
         }
         if (zzlLength(zobj->ptr) == 0) {
@@ -1445,13 +1541,13 @@ void zremrangeGenericCommand(redisClient *c, int rangetype) {
         zset *zs = zobj->ptr;
         switch(rangetype) {
         case ZRANGE_RANK:
-            deleted = zslDeleteRangeByRank(zs->zsl,start+1,end+1,zs->dict);
+            deleted = zslDeleteRangeByRank(zs->zsl,start+1,end+1,zs->dict,trans);
             break;
         case ZRANGE_SCORE:
-            deleted = zslDeleteRangeByScore(zs->zsl,&range,zs->dict);
+            deleted = zslDeleteRangeByScore(zs->zsl,&range,zs->dict,trans);
             break;
         case ZRANGE_LEX:
-            deleted = zslDeleteRangeByLex(zs->zsl,&lexrange,zs->dict);
+            deleted = zslDeleteRangeByLex(zs->zsl,&lexrange,zs->dict,trans);
             break;
         }
         if (htNeedsResize(zs->dict)) dictResize(zs->dict);
@@ -1464,6 +1560,12 @@ void zremrangeGenericCommand(redisClient *c, int rangetype) {
     }
 
     /* Step 4: Notifications and reply. */
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     if (deleted) {
         char *event[3] = {"zremrangebyrank","zremrangebyscore","zremrangebylex"};
         signalModifiedKey(c->db,key);
@@ -1642,12 +1744,12 @@ int zuiLength(zsetopsrc *op) {
 /* Check if the current value is valid. If so, store it in the passed structure
  * and move to the next element. If not valid, this means we have reached the
  * end of the structure and can abort. */
-int zuiNext(zsetopsrc *op, zsetopval *val) {
+int zuiNext(zsetopsrc *op, zsetopval *val, PM_TRANS trans) {
     if (op->subject == NULL)
         return 0;
 
     if (val->flags & OPVAL_DIRTY_ROBJ)
-        decrRefCount(val->ele);
+        decrRefCount(val->ele,trans);
 
     memset(val,0,sizeof(zsetopval));
 
@@ -1727,12 +1829,12 @@ int zuiLongLongFromValue(zsetopval *val) {
     return val->flags & OPVAL_VALID_LL;
 }
 
-robj *zuiObjectFromValue(zsetopval *val) {
+robj *zuiObjectFromValue(zsetopval *val, PM_TRANS trans) {
     if (val->ele == NULL) {
         if (val->estr != NULL) {
-            val->ele = createStringObject((char*)val->estr,val->elen);
+            val->ele = createStringObject((char*)val->estr,val->elen,trans);
         } else {
-            val->ele = createStringObjectFromLongLong(val->ell);
+            val->ele = createStringObjectFromLongLong(val->ell,trans);
         }
         val->flags |= OPVAL_DIRTY_ROBJ;
     }
@@ -1761,7 +1863,7 @@ int zuiBufferFromValue(zsetopval *val) {
 
 /* Find value pointed to by val in the source pointer to by op. When found,
  * return 1 and store its score in target. Return 0 otherwise. */
-int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
+int zuiFind(zsetopsrc *op, zsetopval *val, double *score, PM_TRANS trans) {
     if (op->subject == NULL)
         return 0;
 
@@ -1777,7 +1879,7 @@ int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
             }
         } else if (op->encoding == REDIS_ENCODING_HT) {
             dict *ht = op->subject->ptr;
-            zuiObjectFromValue(val);
+            zuiObjectFromValue(val,trans);
             if (dictFind(ht,val->ele) != NULL) {
                 *score = 1.0;
                 return 1;
@@ -1788,10 +1890,10 @@ int zuiFind(zsetopsrc *op, zsetopval *val, double *score) {
             redisPanic("Unknown set encoding");
         }
     } else if (op->type == REDIS_ZSET) {
-        zuiObjectFromValue(val);
+        zuiObjectFromValue(val,trans);
 
         if (op->encoding == REDIS_ENCODING_ZIPLIST) {
-            if (zzlFind(op->subject->ptr,val->ele,score) != NULL) {
+            if (zzlFind(op->subject->ptr,val->ele,score,trans) != NULL) {
                 /* Score is already set by zzlFind. */
                 return 1;
             } else {
@@ -1869,6 +1971,14 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
         return;
     }
 
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+
     /* read keys to be used for input */
     src = zcalloc(sizeof(zsetopsrc) * setnum);
     for (i = 0, j = 3; i < setnum; i++, j++) {
@@ -1877,6 +1987,12 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
             if (obj->type != REDIS_ZSET && obj->type != REDIS_SET) {
                 zfree(src);
                 addReply(c,shared.wrongtypeerr);
+                if(PM_TRANS_RAM!=trans)
+                {
+                    /* Finish transaction*/
+                    pm_trans_clean(trans);
+                    pm_trans_end(trans);
+                }
                 return;
             }
 
@@ -1932,7 +2048,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
      * algorithm's performance */
     qsort(src,setnum,sizeof(zsetopsrc),zuiCompareByCardinality);
 
-    dstobj = createZsetObject();
+    dstobj = createZsetObject(trans);
     dstzset = dstobj->ptr;
     memset(&zval, 0, sizeof(zval));
 
@@ -1942,7 +2058,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
             /* Precondition: as src[0] is non-empty and the inputs are ordered
              * by size, all src[i > 0] are non-empty too. */
             zuiInitIterator(&src[0]);
-            while (zuiNext(&src[0],&zval)) {
+            while (zuiNext(&src[0],&zval,trans)) {
                 double score, value;
 
                 score = src[0].weight * zval.score;
@@ -1954,7 +2070,7 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                     if (src[j].subject == src[0].subject) {
                         value = zval.score*src[j].weight;
                         zunionInterAggregate(&score,value,aggregate);
-                    } else if (zuiFind(&src[j],&zval,&value)) {
+                    } else if (zuiFind(&src[j],&zval,&value,trans)) {
                         value *= src[j].weight;
                         zunionInterAggregate(&score,value,aggregate);
                     } else {
@@ -1964,11 +2080,11 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
 
                 /* Only continue when present in every input. */
                 if (j == setnum) {
-                    tmp = zuiObjectFromValue(&zval);
-                    znode = zslInsert(dstzset->zsl,score,tmp);
-                    incrRefCount(tmp); /* added to skiplist */
-                    dictAdd(dstzset->dict,tmp,&znode->score);
-                    incrRefCount(tmp); /* added to dictionary */
+                    tmp = zuiObjectFromValue(&zval,trans);
+                    znode = zslInsert(dstzset->zsl,score,tmp,trans);
+                    incrRefCount(tmp,trans); /* added to skiplist */
+                    dictAdd(dstzset->dict,tmp,&znode->score,trans);
+                    incrRefCount(tmp,trans); /* added to dictionary */
 
                     if (tmp->encoding == REDIS_ENCODING_RAW)
                         if (sdslen(tmp->ptr) > maxelelen)
@@ -1995,16 +2111,16 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
             if (zuiLength(&src[i]) == 0) continue;
 
             zuiInitIterator(&src[i]);
-            while (zuiNext(&src[i],&zval)) {
+            while (zuiNext(&src[i],&zval,trans)) {
                 /* Initialize value */
                 score = src[i].weight * zval.score;
                 if (isnan(score)) score = 0;
 
                 /* Search for this element in the accumulating dictionary. */
-                de = dictFind(accumulator,zuiObjectFromValue(&zval));
+                de = dictFind(accumulator,zuiObjectFromValue(&zval,trans));
                 /* If we don't have it, we need to create a new entry. */
                 if (de == NULL) {
-                    tmp = zuiObjectFromValue(&zval);
+                    tmp = zuiObjectFromValue(&zval,trans);
                     /* Remember the longest single element encountered,
                      * to understand if it's possible to convert to ziplist
                      * at the end. */
@@ -2013,8 +2129,8 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
                             maxelelen = sdslen(tmp->ptr);
                     }
                     /* Add the element with its initial score. */
-                    de = dictAddRaw(accumulator,tmp);
-                    incrRefCount(tmp);
+                    de = dictAddRaw(accumulator,tmp,trans);
+                    incrRefCount(tmp,trans);
                     dictSetDoubleVal(de,score);
                 } else {
                     /* Update the score with the score of the new instance
@@ -2040,10 +2156,10 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
         while((de = dictNext(di)) != NULL) {
             robj *ele = dictGetKey(de);
             score = dictGetDoubleVal(de);
-            znode = zslInsert(dstzset->zsl,score,ele);
-            incrRefCount(ele); /* added to skiplist */
-            dictAdd(dstzset->dict,ele,&znode->score);
-            incrRefCount(ele); /* added to dictionary */
+            znode = zslInsert(dstzset->zsl,score,ele,trans);
+            incrRefCount(ele,trans); /* added to skiplist */
+            dictAdd(dstzset->dict,ele,&znode->score,trans);
+            incrRefCount(ele,trans); /* added to dictionary */
         }
         dictReleaseIterator(di);
 
@@ -2062,9 +2178,9 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
         /* Convert to ziplist when in limits. */
         if (dstzset->zsl->length <= server.zset_max_ziplist_entries &&
             maxelelen <= server.zset_max_ziplist_value)
-                zsetConvert(dstobj,REDIS_ENCODING_ZIPLIST);
+                zsetConvert(dstobj,REDIS_ENCODING_ZIPLIST,trans);
 
-        dbAdd(c->db,dstkey,dstobj);
+        dbAdd(c->db,dstkey,dstobj, trans);
         addReplyLongLong(c,zsetLength(dstobj));
         if (!touched) signalModifiedKey(c->db,dstkey);
         notifyKeyspaceEvent(REDIS_NOTIFY_ZSET,
@@ -2072,11 +2188,18 @@ void zunionInterGenericCommand(redisClient *c, robj *dstkey, int op) {
             dstkey,c->db->id);
         server.dirty++;
     } else {
-        decrRefCount(dstobj);
+        decrRefCount(dstobj,trans);
         addReply(c,shared.czero);
         if (touched)
             notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",dstkey,c->db->id);
     }
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     zfree(src);
 }
 
@@ -2753,7 +2876,7 @@ void zscoreCommand(redisClient *c) {
         checkType(c,zobj,REDIS_ZSET)) return;
 
     if (zobj->encoding == REDIS_ENCODING_ZIPLIST) {
-        if (zzlFind(zobj->ptr,c->argv[2],&score) != NULL)
+        if (zzlFind(zobj->ptr,c->argv[2],&score, PM_TRANS_RAM) != NULL)
             addReplyDouble(c,score);
         else
             addReply(c,shared.nullbulk);
@@ -2761,7 +2884,7 @@ void zscoreCommand(redisClient *c) {
         zset *zs = zobj->ptr;
         dictEntry *de;
 
-        c->argv[2] = tryObjectEncoding(c->argv[2]);
+        c->argv[2] = tryObjectEncoding(c->argv[2], PM_TRANS_RAM);
         de = dictFind(zs->dict,c->argv[2]);
         if (de != NULL) {
             score = *(double*)dictGetVal(de);
@@ -2817,7 +2940,7 @@ void zrankGenericCommand(redisClient *c, int reverse) {
         dictEntry *de;
         double score;
 
-        ele = c->argv[2] = tryObjectEncoding(c->argv[2]);
+        ele = c->argv[2] = tryObjectEncoding(c->argv[2], PM_TRANS_RAM);
         de = dictFind(zs->dict,ele);
         if (de != NULL) {
             score = *(double*)dictGetVal(de);

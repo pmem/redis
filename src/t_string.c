@@ -28,6 +28,8 @@
  */
 
 #include "redis.h"
+#include "pm.h"
+#include "sds.h"
 #include <math.h> /* isnan(), isinf() */
 
 /*-----------------------------------------------------------------------------
@@ -81,7 +83,19 @@ void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *ex
         addReply(c, abort_reply ? abort_reply : shared.nullbulk);
         return;
     }
-    setKey(c->db,key,val);
+
+
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+        /*Copy value to persistent, work only for string*/
+        val = createValObject(val, trans);
+    }
+
+    setKey(c->db,key,val,trans);
     server.dirty++;
     if (expire) setExpire(c->db,key,mstime()+milliseconds);
     notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"set",key,c->db->id);
@@ -123,22 +137,22 @@ void setCommand(redisClient *c) {
         }
     }
 
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    c->argv[2] = tryObjectEncoding(c->argv[2],PM_TRANS_RAM);
     setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
 }
 
 void setnxCommand(redisClient *c) {
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    c->argv[2] = tryObjectEncoding(c->argv[2],PM_TRANS_RAM);
     setGenericCommand(c,REDIS_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);
 }
 
 void setexCommand(redisClient *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    c->argv[3] = tryObjectEncoding(c->argv[3],PM_TRANS_RAM);
     setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);
 }
 
 void psetexCommand(redisClient *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    c->argv[3] = tryObjectEncoding(c->argv[3],PM_TRANS_RAM);
     setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
 }
 
@@ -163,8 +177,27 @@ void getCommand(redisClient *c) {
 
 void getsetCommand(redisClient *c) {
     if (getGenericCommand(c) == REDIS_ERR) return;
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setKey(c->db,c->argv[1],c->argv[2]);
+    c->argv[2] = tryObjectEncoding(c->argv[2],PM_TRANS_RAM);
+
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    robj* val = c->argv[2];
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+        /*Copy value to persistent, work only for string*/
+        val = createValObject(val, trans);
+    }
+
+    setKey(c->db,c->argv[1],val,trans);
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        decrRefCount(val, trans); /* Remove not handle copy of value from PM*/
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"set",c->argv[1],c->db->id);
     server.dirty++;
 }
@@ -194,8 +227,21 @@ void setrangeCommand(redisClient *c) {
         if (checkStringLength(c,offset+sdslen(value)) != REDIS_OK)
             return;
 
-        o = createObject(REDIS_STRING,sdsempty());
-        dbAdd(c->db,c->argv[1],o);
+        /*Check that value should be keep in persistent memory*/
+        PM_TRANS trans = PM_TRANS_RAM;
+        if(c->db->dict->type->persistent)
+        {
+            trans = pm_pool;
+        }
+        o = createObject(REDIS_STRING,sdsempty(trans),trans);
+        dbAdd(c->db,c->argv[1],o, trans);
+
+        if(PM_TRANS_RAM!=trans)
+        {
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
+
     } else {
         size_t olen;
 
@@ -214,8 +260,20 @@ void setrangeCommand(redisClient *c) {
         if (checkStringLength(c,offset+sdslen(value)) != REDIS_OK)
             return;
 
+        /*Check that value should be keep in persistent memory*/
+        PM_TRANS trans = PM_TRANS_RAM;
+        if(c->db->dict->type->persistent)
+        {
+            trans = pm_pool;
+        }
+
         /* Create a copy when the object is shared or encoded. */
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
+        o = dbUnshareStringValue(c->db,c->argv[1],o,trans);
+        if(PM_TRANS_RAM!=trans)
+        {
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
     }
 
     if (sdslen(value) > 0) {
@@ -306,8 +364,27 @@ void msetGenericCommand(redisClient *c, int nx) {
     }
 
     for (j = 1; j < c->argc; j += 2) {
-        c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
-        setKey(c->db,c->argv[j],c->argv[j+1]);
+        c->argv[j+1] = tryObjectEncoding(c->argv[j+1],PM_TRANS_RAM);
+
+        /*Check that value should be keep in persistent memory*/
+        PM_TRANS trans = PM_TRANS_RAM;
+        robj* val = c->argv[j+1];
+        if(c->db->dict->type->persistent)
+        {
+            trans = pm_pool;
+            /*Copy value to persistent, work only for string*/
+            val = createValObject(val, trans);
+        }
+
+        setKey(c->db,c->argv[j],val,trans);
+
+        if(PM_TRANS_RAM!=trans)
+        {
+            decrRefCount(val, trans); /* Remove not handle copy of value from PM*/
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
+
         notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"set",c->argv[j],c->db->id);
     }
     server.dirty += (c->argc-1)/2;
@@ -337,11 +414,28 @@ void incrDecrCommand(redisClient *c, long long incr) {
         return;
     }
     value += incr;
-    new = createStringObjectFromLongLong(value);
+
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    new = createStringObjectFromLongLong(value,trans);
+
     if (o)
-        dbOverwrite(c->db,c->argv[1],new);
+        dbOverwrite(c->db,c->argv[1],new,trans);
     else
-        dbAdd(c->db,c->argv[1],new);
+        dbAdd(c->db,c->argv[1],new, trans);
+
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"incrby",c->argv[1],c->db->id);
     server.dirty++;
@@ -387,11 +481,21 @@ void incrbyfloatCommand(redisClient *c) {
         addReplyError(c,"increment would produce NaN or Infinity");
         return;
     }
-    new = createStringObjectFromLongDouble(value,1);
+    /*Check that value should be keep in persistent memory*/
+    PM_TRANS trans = PM_TRANS_RAM;
+    if(c->db->dict->type->persistent)
+    {
+        trans = pm_pool;
+    }
+
+    new = createStringObjectFromLongDouble(value,1,trans);
+
+
+
     if (o)
-        dbOverwrite(c->db,c->argv[1],new);
+        dbOverwrite(c->db,c->argv[1],new,trans);
     else
-        dbAdd(c->db,c->argv[1],new);
+        dbAdd(c->db,c->argv[1],new,trans);
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"incrbyfloat",c->argv[1],c->db->id);
     server.dirty++;
@@ -400,10 +504,19 @@ void incrbyfloatCommand(redisClient *c) {
     /* Always replicate INCRBYFLOAT as a SET command with the final value
      * in order to make sure that differences in float precision or formatting
      * will not create differences in replicas or after an AOF restart. */
-    aux = createStringObject("SET",3);
+    aux = createStringObject("SET",3,trans);
     rewriteClientCommandArgument(c,0,aux);
-    decrRefCount(aux);
+    decrRefCount(aux,trans);
     rewriteClientCommandArgument(c,2,new);
+
+
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        /* Finish transaction*/
+        pm_trans_end(trans);
+    }
+
 }
 
 void appendCommand(redisClient *c) {
@@ -413,10 +526,32 @@ void appendCommand(redisClient *c) {
     o = lookupKeyWrite(c->db,c->argv[1]);
     if (o == NULL) {
         /* Create the key */
-        c->argv[2] = tryObjectEncoding(c->argv[2]);
-        dbAdd(c->db,c->argv[1],c->argv[2]);
-        incrRefCount(c->argv[2]);
-        totlen = stringObjectLen(c->argv[2]);
+        c->argv[2] = tryObjectEncoding(c->argv[2],PM_TRANS_RAM);
+
+
+        /*Check that value should be keep in persistent memory*/
+         PM_TRANS trans = PM_TRANS_RAM;
+         robj* val = c->argv[2];
+         if(c->db->dict->type->persistent)
+         {
+             trans = pm_pool;
+             /*Copy value to persistent, work only for string*/
+             val = createValObject(val, trans);
+         }
+
+
+        dbAdd(c->db,c->argv[1],val, trans);
+        incrRefCount(val,trans);
+
+        totlen = stringObjectLen(val);
+
+        if(PM_TRANS_RAM!=trans)
+        {
+            decrRefCount(val,trans); /*Remove not handle object*/
+            /* Finish transaction*/
+            pm_trans_end(trans);
+        }
+
     } else {
         /* Key exists, check type */
         if (checkType(c,o,REDIS_STRING))
@@ -429,7 +564,7 @@ void appendCommand(redisClient *c) {
             return;
 
         /* Append the value */
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
+        o = dbUnshareStringValue(c->db,c->argv[1],o,PM_TRANS_RAM);
         o->ptr = sdscatlen(o->ptr,append->ptr,sdslen(append->ptr));
         totlen = sdslen(o->ptr);
     }

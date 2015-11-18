@@ -34,6 +34,7 @@
  */
 
 #include <stdint.h>
+#include "pm.h"
 
 #ifndef __DICT_H
 #define __DICT_H
@@ -60,8 +61,9 @@ typedef struct dictType {
     void *(*keyDup)(void *privdata, const void *key);
     void *(*valDup)(void *privdata, const void *obj);
     int (*keyCompare)(void *privdata, const void *key1, const void *key2);
-    void (*keyDestructor)(void *privdata, void *key);
-    void (*valDestructor)(void *privdata, void *obj);
+    void (*keyDestructor)(void *privdata, void *key, PM_TRANS trans);
+    void (*valDestructor)(void *privdata, void *obj, PM_TRANS trans);
+    int persistent; /*Flag to check that dict is in persistent memory*/
 } dictType;
 
 /* This is our hash table structure. Every dictionary has two of this as we
@@ -100,16 +102,27 @@ typedef void (dictScanFunction)(void *privdata, const dictEntry *de);
 #define DICT_HT_INITIAL_SIZE     4
 
 /* ------------------------------- Macros ------------------------------------*/
-#define dictFreeVal(d, entry) \
+#define dictFreeVal(d, entry, trans) \
     if ((d)->type->valDestructor) \
-        (d)->type->valDestructor((d)->privdata, (entry)->v.val)
+        (d)->type->valDestructor((d)->privdata, (entry)->v.val,trans)
 
-#define dictSetVal(d, entry, _val_) do { \
-    if ((d)->type->valDup) \
-        entry->v.val = (d)->type->valDup((d)->privdata, _val_); \
-    else \
-        entry->v.val = (_val_); \
-} while(0)
+
+#define dictSetVal(d, entry, _val_, trans) \
+    do { \
+        if(PM_TRANS_RAM!=trans) { \
+            if ((d)->type->valDup) \
+                pm_trans_set(trans, &(entry->v.val ), (d)->type->valDup((d)->privdata, _val_) ); \
+            else \
+                pm_trans_set(trans, &(entry->v.val ), _val_ ); \
+        } else { \
+            if ((d)->type->valDup) \
+                entry->v.val = (d)->type->valDup((d)->privdata, _val_); \
+            else \
+                entry->v.val = (_val_); \
+        } \
+    } while(0)
+
+
 
 #define dictSetSignedIntegerVal(entry, _val_) \
     do { entry->v.s64 = _val_; } while(0)
@@ -120,15 +133,15 @@ typedef void (dictScanFunction)(void *privdata, const dictEntry *de);
 #define dictSetDoubleVal(entry, _val_) \
     do { entry->v.d = _val_; } while(0)
 
-#define dictFreeKey(d, entry) \
+#define dictFreeKey(d, entry, trans) \
     if ((d)->type->keyDestructor) \
-        (d)->type->keyDestructor((d)->privdata, (entry)->key)
+        (d)->type->keyDestructor((d)->privdata, (entry)->key,trans)
 
 #define dictSetKey(d, entry, _key_) do { \
-    if ((d)->type->keyDup) \
-        entry->key = (d)->type->keyDup((d)->privdata, _key_); \
-    else \
-        entry->key = (_key_); \
+        if ((d)->type->keyDup) \
+            entry->key = (d)->type->keyDup((d)->privdata, _key_); \
+        else \
+            entry->key = (_key_); \
 } while(0)
 
 #define dictCompareKeys(d, key1, key2) \
@@ -149,10 +162,11 @@ typedef void (dictScanFunction)(void *privdata, const dictEntry *de);
 /* API */
 dict *dictCreate(dictType *type, void *privDataPtr);
 int dictExpand(dict *d, unsigned long size);
-int dictAdd(dict *d, void *key, void *val);
-dictEntry *dictAddRaw(dict *d, void *key);
-int dictReplace(dict *d, void *key, void *val);
-dictEntry *dictReplaceRaw(dict *d, void *key);
+int dictAdd(dict *d, void *key, void *val, PM_TRANS trans);
+dictEntry *dictAddRaw(dict *d, void *key, PM_TRANS trans);
+void dictAddDictEntry(dict *d, dictEntry *e);
+int dictReplace(dict *d, void *key, void *val, PM_TRANS trans);
+dictEntry *dictReplaceRaw(dict *d, void *key, PM_TRANS trans);
 int dictDelete(dict *d, const void *key);
 int dictDeleteNoFree(dict *d, const void *key);
 void dictRelease(dict *d);

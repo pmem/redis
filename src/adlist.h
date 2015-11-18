@@ -30,6 +30,7 @@
 
 #ifndef __ADLIST_H__
 #define __ADLIST_H__
+#include "pm.h"
 
 /* Node, List, and Iterator are the only data structures used currently. */
 
@@ -48,7 +49,7 @@ typedef struct list {
     listNode *head;
     listNode *tail;
     void *(*dup)(void *ptr);
-    void (*free)(void *ptr);
+    void (*free)(void *ptr, PM_TRANS trans);
     int (*match)(void *ptr, void *key);
     unsigned long len;
 } list;
@@ -70,16 +71,16 @@ typedef struct list {
 #define listGetMatchMethod(l) ((l)->match)
 
 /* Prototypes */
-list *listCreate(void);
-void listRelease(list *list);
-list *listAddNodeHead(list *list, void *value);
-list *listAddNodeTail(list *list, void *value);
-list *listInsertNode(list *list, listNode *old_node, void *value, int after);
-void listDelNode(list *list, listNode *node);
+list *listCreate(PM_TRANS trans);
+void listRelease(list *list, PM_TRANS trans);
+list *listAddNodeHead(list *list, void *value, PM_TRANS trans);
+list *listAddNodeTail(list *list, void *value, PM_TRANS trans);
+list *listInsertNode(list *list, listNode *old_node, void *value, int after, PM_TRANS trans);
+void listDelNode(list *list, listNode *node, PM_TRANS trans);
 listIter *listGetIterator(list *list, int direction);
 listNode *listNext(listIter *iter);
 void listReleaseIterator(listIter *iter);
-list *listDup(list *orig);
+list *listDup(list *orig, PM_TRANS trans);
 listNode *listSearchKey(list *list, void *key);
 listNode *listIndex(list *list, long index);
 void listRewind(list *list, listIter *li);

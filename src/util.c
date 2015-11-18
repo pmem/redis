@@ -479,17 +479,17 @@ void getRandomHexChars(char *p, unsigned int len) {
 sds getAbsolutePath(char *filename) {
     char cwd[1024];
     sds abspath;
-    sds relpath = sdsnew(filename);
+    sds relpath = sdsnew(filename, PM_TRANS_RAM);
 
     relpath = sdstrim(relpath," \r\n\t");
     if (relpath[0] == '/') return relpath; /* Path is already absolute. */
 
     /* If path is relative, join cwd and relative path. */
     if (getcwd(cwd,sizeof(cwd)) == NULL) {
-        sdsfree(relpath);
+        sdsfree(relpath, PM_TRANS_RAM);
         return NULL;
     }
-    abspath = sdsnew(cwd);
+    abspath = sdsnew(cwd, PM_TRANS_RAM);
     if (sdslen(abspath) && abspath[sdslen(abspath)-1] != '/')
         abspath = sdscat(abspath,"/");
 
@@ -517,7 +517,7 @@ sds getAbsolutePath(char *filename) {
 
     /* Finally glue the two parts together. */
     abspath = sdscatsds(abspath,relpath);
-    sdsfree(relpath);
+    sdsfree(relpath, PM_TRANS_RAM);
     return abspath;
 }
 

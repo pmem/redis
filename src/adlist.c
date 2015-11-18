@@ -32,30 +32,44 @@
 #include <stdlib.h>
 #include "adlist.h"
 #include "zmalloc.h"
+#include "pm.h"
 
 /* Create a new list. The created list can be freed with
  * AlFreeList(), but private value of every node need to be freed
  * by the user before to call AlFreeList().
  *
  * On error, NULL is returned. Otherwise the pointer to the new list. */
-list *listCreate(void)
+list *listCreate(PM_TRANS trans)
 {
     struct list *list;
+    if(PM_TRANS_RAM!=trans)
+    {
+        if ((list = pm_trans_alloc(trans, sizeof(*list), PM_TAG_ALLOC_UNKN,NULL)) == NULL)
+            return NULL;
+    }
+    else
+    {
+        if ((list = zmalloc(sizeof(*list))) == NULL)
+            return NULL;
+    }
 
-    if ((list = zmalloc(sizeof(*list))) == NULL)
-        return NULL;
+
     list->head = list->tail = NULL;
     list->len = 0;
     list->dup = NULL;
     list->free = NULL;
     list->match = NULL;
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,list, sizeof(*list));
+    }
     return list;
 }
 
 /* Free the whole list.
  *
  * This function can't fail. */
-void listRelease(list *list)
+void listRelease(list *list, PM_TRANS trans)
 {
     unsigned long len;
     listNode *current, *next;
@@ -64,36 +78,82 @@ void listRelease(list *list)
     len = list->len;
     while(len--) {
         next = current->next;
-        if (list->free) list->free(current->value);
-        zfree(current);
+        if (list->free) list->free(current->value, trans);
+        if(PM_TRANS_RAM!=trans)
+        {
+            pm_trans_free(trans, current);
+        }
+        else
+        {
+            zfree(current);
+        }
         current = next;
     }
-    zfree(list);
+
+    if(PM_TRANS_RAM!=trans)
+    {
+        pm_trans_free(trans, list);
+    }
+    else
+    {
+        zfree(list);
+    }
 }
 
-/* Add a new node to the list, to head, containing the specified 'value'
+/* Add a new node to the list, to head, contaning the specified 'value'
  * pointer as value.
  *
  * On error, NULL is returned and no operation is performed (i.e. the
  * list remains unaltered).
  * On success the 'list' pointer you pass to the function is returned. */
-list *listAddNodeHead(list *list, void *value)
+list *listAddNodeHead(list *list, void *value, PM_TRANS trans)
 {
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
-        return NULL;
-    node->value = value;
-    if (list->len == 0) {
-        list->head = list->tail = node;
-        node->prev = node->next = NULL;
-    } else {
-        node->prev = NULL;
-        node->next = list->head;
-        list->head->prev = node;
-        list->head = node;
+    if(PM_TRANS_RAM!=trans)
+    {
+        if ((node = pm_trans_alloc(trans, sizeof(*node),PM_TAG_ALLOC_UNKN,NULL)) == NULL)
+        {
+                return NULL;
+        }
+        node->value = value;
+        if (list->len == 0) {
+            /*list->head = list->tail = node;*/
+            pm_trans_set(trans, (void**)&(list->head),node);
+            pm_trans_set(trans, (void**)&(list->tail),node);
+            node->prev = node->next = NULL;
+        } else {
+            node->prev = NULL;
+            node->next = list->head;
+
+            /*list->head->prev = node;
+            list->head = node;*/
+            pm_trans_set(trans, (void**)&(list->head->prev),node);
+            pm_trans_set(trans, (void**)&(list->head),node);
+        }
+        /*list->len++;*/
+        unsigned long len_new = list->len+1;
+        pm_trans_set_mem(trans, &(list->len),&len_new, sizeof(unsigned long));
+        pmemobj_persist(trans,node, sizeof(*node));
     }
-    list->len++;
+    else
+    {
+        if ((node = zmalloc(sizeof(*node))) == NULL)
+            return NULL;
+
+        node->value = value;
+        if (list->len == 0) {
+            list->head = list->tail = node;
+            node->prev = node->next = NULL;
+        } else {
+            node->prev = NULL;
+            node->next = list->head;
+            list->head->prev = node;
+            list->head = node;
+        }
+        list->len++;
+    }
+
     return list;
 }
 
@@ -103,52 +163,123 @@ list *listAddNodeHead(list *list, void *value)
  * On error, NULL is returned and no operation is performed (i.e. the
  * list remains unaltered).
  * On success the 'list' pointer you pass to the function is returned. */
-list *listAddNodeTail(list *list, void *value)
+list *listAddNodeTail(list *list, void *value, PM_TRANS trans)
 {
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
-        return NULL;
-    node->value = value;
-    if (list->len == 0) {
-        list->head = list->tail = node;
-        node->prev = node->next = NULL;
-    } else {
-        node->prev = list->tail;
-        node->next = NULL;
-        list->tail->next = node;
-        list->tail = node;
+    if(PM_TRANS_RAM!=trans)
+    {
+        if ((node = pm_trans_alloc(trans, sizeof(*node),PM_TAG_ALLOC_UNKN,NULL)) == NULL)
+        {
+                return NULL;
+        }
+        node->value = value;
+        if (list->len == 0) {
+            /*list->head = list->tail = node;*/
+            pm_trans_set(trans, (void**)&(list->head),node);
+            pm_trans_set(trans, (void**)&(list->tail),node);
+            node->prev = node->next = NULL;
+        } else {
+            node->prev = list->tail;
+            node->next = NULL;
+
+            /*list->tail->next = node;
+            list->tail = node;*/
+            pm_trans_set(trans, (void**)&(list->tail->next),node);
+            pm_trans_set(trans, (void**)&(list->tail),node);
+        }
+        /*list->len++;*/
+        unsigned long len_new = list->len+1;
+        pm_trans_set_mem(trans, &(list->len),&len_new, sizeof(unsigned long));
+        pmemobj_persist(trans,node, sizeof(*node));
     }
-    list->len++;
+    else
+    {
+        if ((node = zmalloc(sizeof(*node))) == NULL)
+            return NULL;
+        node->value = value;
+        if (list->len == 0) {
+            list->head = list->tail = node;
+            node->prev = node->next = NULL;
+        } else {
+            node->prev = list->tail;
+            node->next = NULL;
+            list->tail->next = node;
+            list->tail = node;
+        }
+        list->len++;
+    }
     return list;
 }
 
-list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
+list *listInsertNode(list *list, listNode *old_node, void *value, int after, PM_TRANS trans) {
+
     listNode *node;
 
-    if ((node = zmalloc(sizeof(*node))) == NULL)
-        return NULL;
-    node->value = value;
-    if (after) {
-        node->prev = old_node;
-        node->next = old_node->next;
-        if (list->tail == old_node) {
-            list->tail = node;
+    if(PM_TRANS_RAM!=trans)
+    {
+        if ((node = pm_trans_alloc(trans, sizeof(*node),PM_TAG_ALLOC_UNKN,NULL)) == NULL)
+        {
+                return NULL;
         }
-    } else {
-        node->next = old_node;
-        node->prev = old_node->prev;
-        if (list->head == old_node) {
-            list->head = node;
+        node->value = value;
+        if (after) {
+            node->prev = old_node;
+            node->next = old_node->next;
+            if (list->tail == old_node) {
+                /*list->tail = node;*/
+                pm_trans_set(trans, (void**)&(list->tail),node);
+
+            }
+        } else {
+            node->next = old_node;
+            node->prev = old_node->prev;
+            if (list->head == old_node) {
+                /*list->head = node;*/
+                pm_trans_set(trans, (void**)&(list->head),node);
+            }
         }
+        if (node->prev != NULL) {
+            /*node->prev->next = node;*/
+            pm_trans_set(trans, (void**)&(node->prev->next),node);
+
+        }
+        if (node->next != NULL) {
+            /*node->next->prev = node;*/
+            pm_trans_set(trans, (void**)&(node->next->prev),node);
+        }
+
+        /*list->len++;*/
+        unsigned long len_new = list->len+1;
+        pm_trans_set_mem(trans, &(list->len),&len_new, sizeof(unsigned long));
+        pmemobj_persist(trans,node, sizeof(*node));
     }
-    if (node->prev != NULL) {
-        node->prev->next = node;
+    else
+    {
+        if ((node = zmalloc(sizeof(*node))) == NULL)
+            return NULL;
+        node->value = value;
+        if (after) {
+            node->prev = old_node;
+            node->next = old_node->next;
+            if (list->tail == old_node) {
+                list->tail = node;
+            }
+        } else {
+            node->next = old_node;
+            node->prev = old_node->prev;
+            if (list->head == old_node) {
+                list->head = node;
+            }
+        }
+        if (node->prev != NULL) {
+            node->prev->next = node;
+        }
+        if (node->next != NULL) {
+            node->next->prev = node;
+        }
+        list->len++;
     }
-    if (node->next != NULL) {
-        node->next->prev = node;
-    }
-    list->len++;
     return list;
 }
 
@@ -156,19 +287,53 @@ list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
  * It's up to the caller to free the private value of the node.
  *
  * This function can't fail. */
-void listDelNode(list *list, listNode *node)
+void listDelNode(list *list, listNode *node, PM_TRANS trans)
 {
-    if (node->prev)
-        node->prev->next = node->next;
+    if(PM_TRANS_RAM!=trans)
+    {
+        if (node->prev)
+        {
+            /*node->prev->next = node->next;*/
+            pm_trans_set(trans, (void**)&(node->prev->next),node->next);
+        }
+        else
+        {
+            /*list->head = node->next;*/
+            pm_trans_set(trans, (void**)&(list->head),node->next);
+        }
+        if (node->next)
+        {
+            /*node->next->prev = node->prev;*/
+            pm_trans_set(trans, (void**)&(node->next->prev),node->prev);
+        }
+        else
+        {
+            /*list->tail = node->prev;*/
+            pm_trans_set(trans, (void**)&(list->tail),node->prev);
+        }
+        if (list->free)
+        {
+            list->free(node->value, trans);
+        }
+        pm_trans_free(trans,node);
+        /*list->len--;*/
+        unsigned long len_new = list->len-1;
+        pm_trans_set_mem(trans, &(list->len),&len_new, sizeof(unsigned long));
+    }
     else
-        list->head = node->next;
-    if (node->next)
-        node->next->prev = node->prev;
-    else
-        list->tail = node->prev;
-    if (list->free) list->free(node->value);
-    zfree(node);
-    list->len--;
+    {
+        if (node->prev)
+            node->prev->next = node->next;
+        else
+            list->head = node->next;
+        if (node->next)
+            node->next->prev = node->prev;
+        else
+            list->tail = node->prev;
+        if (list->free) list->free(node->value, NULL);
+        zfree(node);
+        list->len--;
+    }
 }
 
 /* Returns a list iterator 'iter'. After the initialization every
@@ -239,13 +404,13 @@ listNode *listNext(listIter *iter)
  * the original node is used as value of the copied node.
  *
  * The original list both on success or error is never modified. */
-list *listDup(list *orig)
+list *listDup(list *orig, PM_TRANS trans)
 {
     list *copy;
     listIter *iter;
     listNode *node;
 
-    if ((copy = listCreate()) == NULL)
+    if ((copy = listCreate(trans)) == NULL)
         return NULL;
     copy->dup = orig->dup;
     copy->free = orig->free;
@@ -257,19 +422,23 @@ list *listDup(list *orig)
         if (copy->dup) {
             value = copy->dup(node->value);
             if (value == NULL) {
-                listRelease(copy);
+                listRelease(copy, trans);
                 listReleaseIterator(iter);
                 return NULL;
             }
         } else
             value = node->value;
-        if (listAddNodeTail(copy, value) == NULL) {
-            listRelease(copy);
+        if (listAddNodeTail(copy, value,trans) == NULL) {
+            listRelease(copy, trans);
             listReleaseIterator(iter);
             return NULL;
         }
     }
     listReleaseIterator(iter);
+    if(PM_TRANS_RAM!=trans)
+    {
+    	pmemobj_persist(trans,copy, sizeof(*copy));
+    }
     return copy;
 }
 

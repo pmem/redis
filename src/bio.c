@@ -99,7 +99,7 @@ void bioInit(void) {
     for (j = 0; j < REDIS_BIO_NUM_OPS; j++) {
         pthread_mutex_init(&bio_mutex[j],NULL);
         pthread_cond_init(&bio_condvar[j],NULL);
-        bio_jobs[j] = listCreate();
+        bio_jobs[j] = listCreate(PM_TRANS_RAM);
         bio_pending[j] = 0;
     }
 
@@ -131,7 +131,7 @@ void bioCreateBackgroundJob(int type, void *arg1, void *arg2, void *arg3) {
     job->arg2 = arg2;
     job->arg3 = arg3;
     pthread_mutex_lock(&bio_mutex[type]);
-    listAddNodeTail(bio_jobs[type],job);
+    listAddNodeTail(bio_jobs[type],job,PM_TRANS_RAM);
     bio_pending[type]++;
     pthread_cond_signal(&bio_condvar[type]);
     pthread_mutex_unlock(&bio_mutex[type]);
@@ -175,7 +175,11 @@ void *bioProcessBackgroundJobs(void *arg) {
         if (type == REDIS_BIO_CLOSE_FILE) {
             close((long)job->arg1);
         } else if (type == REDIS_BIO_AOF_FSYNC) {
+            redisLog(REDIS_VERBOSE,"Executing background fsync() on the AOF file.");
             aof_fsync((long)job->arg1);
+        } else if (type == REDIS_BIO_AOF_MSYNC) {
+            redisLog(REDIS_VERBOSE,"Executing background msync() on the AOF file.");
+            redisMsync(job->arg1, (size_t)job->arg2, MS_SYNC);
         } else {
             redisPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
@@ -184,7 +188,7 @@ void *bioProcessBackgroundJobs(void *arg) {
         /* Lock again before reiterating the loop, if there are no longer
          * jobs to process we'll block again in pthread_cond_wait(). */
         pthread_mutex_lock(&bio_mutex[type]);
-        listDelNode(bio_jobs[type],ln);
+        listDelNode(bio_jobs[type],ln,PM_TRANS_RAM);
         bio_pending[type]--;
     }
 }

@@ -106,7 +106,7 @@ void latencyAddSample(char *event, mstime_t latency) {
         ts->idx = 0;
         ts->max = 0;
         memset(ts->samples,0,sizeof(ts->samples));
-        dictAdd(server.latency_events,zstrdup(event),ts);
+        dictAdd(server.latency_events,zstrdup(event),ts,PM_TRANS_RAM);
     }
 
     /* If the previous sample is in the same second, we update our old sample
@@ -214,7 +214,7 @@ void analyzeLatencyForEvent(char *event, struct latencyStats *ls) {
 
 /* Create a human readable report of latency events for this Redis instance. */
 sds createLatencyReport(void) {
-    sds report = sdsempty();
+    sds report = sdsempty(PM_TRANS_RAM);
     int advise_better_vm = 0;       /* Better virtual machines. */
     int advise_slowlog_enabled = 0; /* Enable slowlog. */
     int advise_slowlog_tuning = 0;  /* Reconfigure slowlog. */
@@ -506,7 +506,7 @@ void latencyCommandReplyWithLatestEvents(redisClient *c) {
 sds latencyCommandGenSparkeline(char *event, struct latencyTimeSeries *ts) {
     int j;
     struct sequence *seq = createSparklineSequence();
-    sds graph = sdsempty();
+    sds graph = sdsempty(PM_TRANS_RAM);
     uint32_t min = 0, max = 0;
 
     for (j = 0; j < LATENCY_TS_LEN; j++) {
@@ -578,7 +578,7 @@ void latencyCommand(redisClient *c) {
 
         graph = latencyCommandGenSparkeline(event,ts);
         addReplyBulkCString(c,graph);
-        sdsfree(graph);
+        sdsfree(graph,PM_TRANS_RAM);
     } else if (!strcasecmp(c->argv[1]->ptr,"latest") && c->argc == 2) {
         /* LATENCY LATEST */
         latencyCommandReplyWithLatestEvents(c);
@@ -587,7 +587,7 @@ void latencyCommand(redisClient *c) {
         sds report = createLatencyReport();
 
         addReplyBulkCBuffer(c,report,sdslen(report));
-        sdsfree(report);
+        sdsfree(report,PM_TRANS_RAM);
     } else if (!strcasecmp(c->argv[1]->ptr,"reset") && c->argc >= 2) {
         /* LATENCY RESET */
         if (c->argc == 2) {

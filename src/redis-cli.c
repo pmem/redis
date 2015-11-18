@@ -156,12 +156,12 @@ static sds getHistoryPath() {
         }
 
         /* if the env is set, return it */
-        historyPath = sdscatprintf(sdsempty(), "%s", path);
+        historyPath = sdscatprintf(sdsempty(PM_TRANS_RAM), "%s", path);
     } else {
         char *home = getenv("HOME");
         if (home != NULL && *home != '\0') {
             /* otherwise, return the default */
-            historyPath = sdscatprintf(sdsempty(), "%s/%s", home, REDIS_CLI_HISTFILE_DEFAULT);
+            historyPath = sdscatprintf(sdsempty(PM_TRANS_RAM), "%s/%s", home, REDIS_CLI_HISTFILE_DEFAULT);
         }
     }
 
@@ -190,7 +190,7 @@ static int helpEntriesLen;
 
 static sds cliVersion(void) {
     sds version;
-    version = sdscatprintf(sdsempty(), "%s", REDIS_VERSION);
+    version = sdscatprintf(sdsempty(PM_TRANS_RAM), "%s", REDIS_VERSION);
 
     /* Add git commit and working tree status when available */
     if (strtoll(redisGitSHA1(),NULL,16)) {
@@ -214,7 +214,7 @@ static void cliInitHelp(void) {
     for (i = 0; i < groupslen; i++) {
         tmp.argc = 1;
         tmp.argv = malloc(sizeof(sds));
-        tmp.argv[0] = sdscatprintf(sdsempty(),"@%s",commandGroups[i]);
+        tmp.argv[0] = sdscatprintf(sdsempty(PM_TRANS_RAM),"@%s",commandGroups[i]);
         tmp.full = tmp.argv[0];
         tmp.type = CLI_HELP_GROUP;
         tmp.org = NULL;
@@ -223,7 +223,7 @@ static void cliInitHelp(void) {
 
     for (i = 0; i < commandslen; i++) {
         tmp.argv = sdssplitargs(commandHelp[i].name,&tmp.argc);
-        tmp.full = sdsnew(commandHelp[i].name);
+        tmp.full = sdsnew(commandHelp[i].name,PM_TRANS_RAM);
         tmp.type = CLI_HELP_COMMAND;
         tmp.org = &commandHelp[i];
         helpEntries[pos++] = tmp;
@@ -251,7 +251,7 @@ static void cliOutputGenericHelp(void) {
         "      \"quit\" to exit\r\n",
         version
     );
-    sdsfree(version);
+    sdsfree(version,PM_TRANS_RAM);
 }
 
 /* Output all command help, filtering by group or command name. */
@@ -319,10 +319,10 @@ static void completionCallback(const char *buf, linenoiseCompletions *lc) {
 
         matchlen = strlen(buf+startpos);
         if (strncasecmp(buf+startpos,helpEntries[i].full,matchlen) == 0) {
-            tmp = sdsnewlen(buf,startpos);
+            tmp = sdsnewlen(buf,startpos,PM_TRANS_RAM);
             tmp = sdscat(tmp,helpEntries[i].full);
             linenoiseAddCompletion(lc,tmp);
-            sdsfree(tmp);
+            sdsfree(tmp,PM_TRANS_RAM);
         }
     }
 }
@@ -362,10 +362,10 @@ static int cliSelect() {
 /* Connect to the server. If force is not zero the connection is performed
  * even if there is already a connected socket. */
 static int cliConnect(int force) {
+
     if (context == NULL || force) {
         if (context != NULL)
             redisFree(context);
-
         if (config.hostsocket == NULL) {
             context = redisConnect(config.hostip,config.hostport);
         } else {
@@ -404,7 +404,7 @@ static void cliPrintContextError(void) {
 }
 
 static sds cliFormatReplyTTY(redisReply *r, char *prefix) {
-    sds out = sdsempty();
+    sds out = sdsempty(PM_TRANS_RAM);
     switch (r->type) {
     case REDIS_REPLY_ERROR:
         out = sdscatprintf(out,"(error) %s\n", r->str);
@@ -445,7 +445,7 @@ static sds cliFormatReplyTTY(redisReply *r, char *prefix) {
             /* Prefix for nested multi bulks should grow with idxlen+2 spaces */
             memset(_prefixlen,' ',idxlen+2);
             _prefixlen[idxlen+2] = '\0';
-            _prefix = sdscat(sdsnew(prefix),_prefixlen);
+            _prefix = sdscat(sdsnew(prefix,PM_TRANS_RAM),_prefixlen);
 
             /* Setup prefix format for every entry */
             snprintf(_prefixfmt,sizeof(_prefixfmt),"%%s%%%dd) ",idxlen);
@@ -458,9 +458,9 @@ static sds cliFormatReplyTTY(redisReply *r, char *prefix) {
                 /* Format the multi bulk entry */
                 tmp = cliFormatReplyTTY(r->element[i],_prefix);
                 out = sdscatlen(out,tmp,sdslen(tmp));
-                sdsfree(tmp);
+                sdsfree(tmp,PM_TRANS_RAM);
             }
-            sdsfree(_prefix);
+            sdsfree(_prefix,PM_TRANS_RAM);
         }
     break;
     default:
@@ -471,7 +471,7 @@ static sds cliFormatReplyTTY(redisReply *r, char *prefix) {
 }
 
 static sds cliFormatReplyRaw(redisReply *r) {
-    sds out = sdsempty(), tmp;
+    sds out = sdsempty(PM_TRANS_RAM), tmp;
     size_t i;
 
     switch (r->type) {
@@ -494,7 +494,7 @@ static sds cliFormatReplyRaw(redisReply *r) {
             if (i > 0) out = sdscat(out,config.mb_delim);
             tmp = cliFormatReplyRaw(r->element[i]);
             out = sdscatlen(out,tmp,sdslen(tmp));
-            sdsfree(tmp);
+            sdsfree(tmp,PM_TRANS_RAM);
         }
         break;
     default:
@@ -507,7 +507,7 @@ static sds cliFormatReplyRaw(redisReply *r) {
 static sds cliFormatReplyCSV(redisReply *r) {
     unsigned int i;
 
-    sds out = sdsempty();
+    sds out = sdsempty(PM_TRANS_RAM);
     switch (r->type) {
     case REDIS_REPLY_ERROR:
         out = sdscat(out,"ERROR,");
@@ -530,7 +530,7 @@ static sds cliFormatReplyCSV(redisReply *r) {
             sds tmp = cliFormatReplyCSV(r->element[i]);
             out = sdscatlen(out,tmp,sdslen(tmp));
             if (i != r->elements-1) out = sdscat(out,",");
-            sdsfree(tmp);
+            sdsfree(tmp,PM_TRANS_RAM);
         }
     break;
     default:
@@ -589,8 +589,8 @@ static int cliReadReply(int output_raw_strings) {
         slot = atoi(s+1);
         s = strchr(p+1,':');    /* MOVED 3999[P]127.0.0.1[S]6381 */
         *s = '\0';
-        sdsfree(config.hostip);
-        config.hostip = sdsnew(p+1);
+        sdsfree(config.hostip,PM_TRANS_RAM);
+        config.hostip = sdsnew(p+1,PM_TRANS_RAM);
         config.hostport = atoi(s+1);
         if (config.interactive)
             printf("-> Redirected to slot [%d] located at %s:%d\n",
@@ -613,7 +613,7 @@ static int cliReadReply(int output_raw_strings) {
             }
         }
         fwrite(out,sdslen(out),1,stdout);
-        sdsfree(out);
+        sdsfree(out,PM_TRANS_RAM);
     }
     freeReplyObject(reply);
     return REDIS_OK;
@@ -746,8 +746,8 @@ static int parseOptions(int argc, char **argv) {
         int lastarg = i==argc-1;
 
         if (!strcmp(argv[i],"-h") && !lastarg) {
-            sdsfree(config.hostip);
-            config.hostip = sdsnew(argv[++i]);
+            sdsfree(config.hostip,PM_TRANS_RAM);
+            config.hostip = sdsnew(argv[++i],PM_TRANS_RAM);
         } else if (!strcmp(argv[i],"-h") && lastarg) {
             usage();
         } else if (!strcmp(argv[i],"--help")) {
@@ -808,12 +808,12 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i],"-c")) {
             config.cluster_mode = 1;
         } else if (!strcmp(argv[i],"-d") && !lastarg) {
-            sdsfree(config.mb_delim);
-            config.mb_delim = sdsnew(argv[++i]);
+            sdsfree(config.mb_delim,PM_TRANS_RAM);
+            config.mb_delim = sdsnew(argv[++i],PM_TRANS_RAM);
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
             printf("redis-cli %s\n", version);
-            sdsfree(version);
+            sdsfree(version,PM_TRANS_RAM);
             exit(0);
         } else {
             if (argv[i][0] == '-') {
@@ -832,7 +832,7 @@ static int parseOptions(int argc, char **argv) {
 
 static sds readArgFromStdin(void) {
     char buf[1024];
-    sds arg = sdsempty();
+    sds arg = sdsempty(PM_TRANS_RAM);
 
     while(1) {
         int nread = read(fileno(stdin),buf,1024);
@@ -904,7 +904,7 @@ static void usage(void) {
 "Type \"help\" in interactive mode for information on available commands.\n"
 "\n",
         version, REDIS_CLI_DEFAULT_PIPE_TIMEOUT);
-    sdsfree(version);
+    sdsfree(version,PM_TRANS_RAM);
     exit(1);
 }
 
@@ -914,7 +914,7 @@ static char **convertToSds(int count, char** args) {
   char **sds = zmalloc(sizeof(char*)*count);
 
   for(j = 0; j < count; j++)
-    sds[j] = sdsnew(args[j]);
+    sds[j] = sdsnew(args[j],PM_TRANS_RAM);
 
   return sds;
 }
@@ -956,8 +956,8 @@ static void repl(void) {
                 {
                     exit(0);
                 } else if (argc == 3 && !strcasecmp(argv[0],"connect")) {
-                    sdsfree(config.hostip);
-                    config.hostip = sdsnew(argv[1]);
+                    sdsfree(config.hostip,PM_TRANS_RAM);
+                    config.hostip = sdsnew(argv[1],PM_TRANS_RAM);
                     config.hostport = atoi(argv[2]);
                     cliRefreshPrompt();
                     cliConnect(1);
@@ -1001,7 +1001,7 @@ static void repl(void) {
                 }
             }
             /* Free the argument vector */
-            sdsfreesplitres(argv,argc);
+            sdsfreesplitres(argv,argc,PM_TRANS_RAM);
         }
         /* linenoise() returns malloc-ed lines like readline() */
         free(line);
@@ -1027,7 +1027,7 @@ static int noninteractive(int argc, char **argv) {
  *--------------------------------------------------------------------------- */
 
 static int evalMode(int argc, char **argv) {
-    sds script = sdsempty();
+    sds script = sdsempty(PM_TRANS_RAM);
     FILE *fp;
     char buf[1024];
     size_t nread;
@@ -1048,17 +1048,17 @@ static int evalMode(int argc, char **argv) {
 
     /* Create our argument vector */
     argv2 = zmalloc(sizeof(sds)*(argc+3));
-    argv2[0] = sdsnew("EVAL");
+    argv2[0] = sdsnew("EVAL",PM_TRANS_RAM);
     argv2[1] = script;
     for (j = 0; j < argc; j++) {
         if (!got_comma && argv[j][0] == ',' && argv[j][1] == 0) {
             got_comma = 1;
             continue;
         }
-        argv2[j+3-got_comma] = sdsnew(argv[j]);
+        argv2[j+3-got_comma] = sdsnew(argv[j],PM_TRANS_RAM);
         if (!got_comma) keys++;
     }
-    argv2[2] = sdscatprintf(sdsempty(),"%d",keys);
+    argv2[2] = sdscatprintf(sdsempty(PM_TRANS_RAM),"%d",keys);
 
     /* Call it */
     return cliSendCommand(argc+3-got_comma, argv2, config.repeat);
@@ -1705,7 +1705,7 @@ static void findBigKeys(void) {
 
     /* New up sds strings to keep track of overall biggest per type */
     for(i=0;i<TYPE_NONE; i++) {
-        maxkeys[i] = sdsempty();
+        maxkeys[i] = sdsempty(PM_TRANS_RAM);
         if(!maxkeys[i]) {
             fprintf(stderr, "Failed to allocate memory for largest key names!\n");
             exit(1);
@@ -1808,7 +1808,7 @@ static void findBigKeys(void) {
 
     /* Free sds strings containing max keys */
     for(i=0;i<TYPE_NONE;i++) {
-        sdsfree(maxkeys[i]);
+        sdsfree(maxkeys[i],PM_TRANS_RAM);
     }
 
     /* Success! */
@@ -2158,8 +2158,7 @@ static void intrinsicLatencyMode(void) {
 
 int main(int argc, char **argv) {
     int firstarg;
-
-    config.hostip = sdsnew("127.0.0.1");
+    config.hostip = sdsnew("127.0.0.1",PM_TRANS_RAM);
     config.hostport = 6379;
     config.hostsocket = NULL;
     config.repeat = 1;
@@ -2190,11 +2189,12 @@ int main(int argc, char **argv) {
     config.eval = NULL;
     config.last_cmd_type = -1;
 
+
     if (!isatty(fileno(stdout)) && (getenv("FAKETTY") == NULL))
         config.output = OUTPUT_RAW;
     else
         config.output = OUTPUT_STANDARD;
-    config.mb_delim = sdsnew("\n");
+    config.mb_delim = sdsnew("\n",PM_TRANS_RAM);
     cliInitHelp();
 
     firstarg = parseOptions(argc,argv);
@@ -2263,7 +2263,6 @@ int main(int argc, char **argv) {
     if (argc == 0 && !config.eval) {
         /* Ignore SIGPIPE in interactive mode to force a reconnect */
         signal(SIGPIPE, SIG_IGN);
-
         /* Note that in repl mode we don't abort on connection error.
          * A new attempt will be performed for every command send. */
         cliConnect(0);

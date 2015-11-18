@@ -46,7 +46,7 @@ void freeClientMultiState(redisClient *c) {
         multiCmd *mc = c->mstate.commands+j;
 
         for (i = 0; i < mc->argc; i++)
-            decrRefCount(mc->argv[i]);
+            decrRefCount(mc->argv[i],PM_TRANS_RAM);
         zfree(mc->argv);
     }
     zfree(c->mstate.commands);
@@ -65,7 +65,7 @@ void queueMultiCommand(redisClient *c) {
     mc->argv = zmalloc(sizeof(robj*)*c->argc);
     memcpy(mc->argv,c->argv,sizeof(robj*)*c->argc);
     for (j = 0; j < c->argc; j++)
-        incrRefCount(mc->argv[j]);
+        incrRefCount(mc->argv[j],PM_TRANS_RAM);
     c->mstate.count++;
 }
 
@@ -104,11 +104,11 @@ void discardCommand(redisClient *c) {
 /* Send a MULTI command to all the slaves and AOF file. Check the execCommand
  * implementation for more information. */
 void execCommandPropagateMulti(redisClient *c) {
-    robj *multistring = createStringObject("MULTI",5);
+    robj *multistring = createStringObject("MULTI",5,PM_TRANS_RAM);
 
     propagate(server.multiCommand,c->db->id,&multistring,1,
               REDIS_PROPAGATE_AOF|REDIS_PROPAGATE_REPL);
-    decrRefCount(multistring);
+    decrRefCount(multistring,PM_TRANS_RAM);
 }
 
 void execCommand(redisClient *c) {
@@ -214,18 +214,18 @@ void watchForKey(redisClient *c, robj *key) {
     }
     /* This key is not already watched in this DB. Let's add it */
     clients = dictFetchValue(c->db->watched_keys,key);
-    if (!clients) {
-        clients = listCreate();
-        dictAdd(c->db->watched_keys,key,clients);
-        incrRefCount(key);
+    if (!clients) { 
+        clients = listCreate(PM_TRANS_RAM);
+        dictAdd(c->db->watched_keys,key,clients,PM_TRANS_RAM);
+        incrRefCount(key,PM_TRANS_RAM);
     }
-    listAddNodeTail(clients,c);
+    listAddNodeTail(clients,c,PM_TRANS_RAM);
     /* Add the new key to the list of keys watched by this client */
     wk = zmalloc(sizeof(*wk));
     wk->key = key;
     wk->db = c->db;
-    incrRefCount(key);
-    listAddNodeTail(c->watched_keys,wk);
+    incrRefCount(key,PM_TRANS_RAM);
+    listAddNodeTail(c->watched_keys,wk,PM_TRANS_RAM);
 }
 
 /* Unwatch all the keys watched by this client. To clean the EXEC dirty
@@ -245,13 +245,13 @@ void unwatchAllKeys(redisClient *c) {
         wk = listNodeValue(ln);
         clients = dictFetchValue(wk->db->watched_keys, wk->key);
         redisAssertWithInfo(c,NULL,clients != NULL);
-        listDelNode(clients,listSearchKey(clients,c));
+        listDelNode(clients,listSearchKey(clients,c),PM_TRANS_RAM);
         /* Kill the entry at all if this was the only client */
         if (listLength(clients) == 0)
             dictDelete(wk->db->watched_keys, wk->key);
         /* Remove this watched key from the client->watched list */
-        listDelNode(c->watched_keys,ln);
-        decrRefCount(wk->key);
+        listDelNode(c->watched_keys,ln,PM_TRANS_RAM);
+        decrRefCount(wk->key,PM_TRANS_RAM);
         zfree(wk);
     }
 }

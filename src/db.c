@@ -88,24 +88,35 @@ robj *lookupKeyWriteOrReply(redisClient *c, robj *key, robj *reply) {
  * counter of the value if needed.
  *
  * The program is aborted if the key already exists. */
-void dbAdd(redisDb *db, robj *key, robj *val) {
-    sds copy = sdsdup(key->ptr);
-    int retval = dictAdd(db->dict, copy, val);
+void dbAdd(redisDb *db, robj *key, robj *val, PM_TRANS trans) {
+    redisAssertWithInfo(NULL,key, (0 != db->dict->type->persistent) == (PM_TRANS_RAM != trans));
 
+    sds copy = NULL;
+    if(PM_TRANS_RAM == trans)
+    {
+        copy = sdsdup(key->ptr, trans);
+    }
+    else
+    {
+        copy = key->ptr;
+    }
+    int retval = dictAdd(db->dict, copy, val, trans);
     redisAssertWithInfo(NULL,key,retval == REDIS_OK);
     if (val->type == REDIS_LIST) signalListAsReady(db, key);
  }
+
+
 
 /* Overwrite an existing key with a new value. Incrementing the reference
  * count of the new value is up to the caller.
  * This function does not modify the expire time of the existing key.
  *
  * The program is aborted if the key was not already present. */
-void dbOverwrite(redisDb *db, robj *key, robj *val) {
+void dbOverwrite(redisDb *db, robj *key, robj *val, PM_TRANS trans) {
+    redisAssertWithInfo(NULL,key, (0 != db->dict->type->persistent) == (NULL != trans));
     struct dictEntry *de = dictFind(db->dict,key->ptr);
-
     redisAssertWithInfo(NULL,key,de != NULL);
-    dictReplace(db->dict, key->ptr, val);
+    dictReplace(db->dict, key->ptr, val, trans);
 }
 
 /* High level Set operation. This function can be used in order to set
@@ -114,13 +125,13 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
  * 1) The ref count of the value object is incremented.
  * 2) clients WATCHing for the destination key notified.
  * 3) The expire time of the key is reset (the key is made persistent). */
-void setKey(redisDb *db, robj *key, robj *val) {
+void setKey(redisDb *db, robj *key, robj *val, PM_TRANS trans) {
     if (lookupKeyWrite(db,key) == NULL) {
-        dbAdd(db,key,val);
+        dbAdd(db,key,val,trans);
     } else {
-        dbOverwrite(db,key,val);
+        dbOverwrite(db,key,val,trans);
     }
-    incrRefCount(val);
+    incrRefCount(val,trans);
     removeExpire(db,key);
     signalModifiedKey(db,key);
 }
@@ -144,10 +155,10 @@ robj *dbRandomKey(redisDb *db) {
         if (de == NULL) return NULL;
 
         key = dictGetKey(de);
-        keyobj = createStringObject(key,sdslen(key));
+        keyobj = createStringObject(key,sdslen(key), PM_TRANS_RAM);
         if (dictFind(db->expires,key)) {
             if (expireIfNeeded(db,keyobj)) {
-                decrRefCount(keyobj);
+                decrRefCount(keyobj, PM_TRANS_RAM);
                 continue; /* search for another key. This expired. */
             }
         }
@@ -194,13 +205,13 @@ int dbDelete(redisDb *db, robj *key) {
  * At this point the caller is ready to modify the object, for example
  * using an sdscat() call to append some data, or anything else.
  */
-robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
+robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o,PM_TRANS trans) {
     redisAssert(o->type == REDIS_STRING);
     if (o->refcount != 1 || o->encoding != REDIS_ENCODING_RAW) {
-        robj *decoded = getDecodedObject(o);
-        o = createStringObject(decoded->ptr, sdslen(decoded->ptr));
-        decrRefCount(decoded);
-        dbOverwrite(db,key,o);
+        robj *decoded = getDecodedObject(o,trans);
+        o = createStringObject(decoded->ptr, sdslen(decoded->ptr),trans);
+        decrRefCount(decoded,trans);
+        dbOverwrite(db,key,o,trans);
     }
     return o;
 }
@@ -254,6 +265,8 @@ void flushdbCommand(redisClient *c) {
 }
 
 void flushallCommand(redisClient *c) {
+    redisLog(REDIS_NOTICE, "%s", __FUNCTION__);
+
     signalFlushedDb(-1);
     server.dirty += emptyDb(NULL);
     addReply(c,shared.ok);
@@ -269,6 +282,8 @@ void flushallCommand(redisClient *c) {
         server.dirty = saved_dirty;
     }
     server.dirty++;
+    if(server.pm_memory_counter)
+    	reset_max_alloc_size();
 }
 
 void delCommand(redisClient *c) {
@@ -319,7 +334,7 @@ void randomkeyCommand(redisClient *c) {
     }
 
     addReplyBulk(c,key);
-    decrRefCount(key);
+    decrRefCount(key,PM_TRANS_RAM);
 }
 
 void keysCommand(redisClient *c) {
@@ -337,12 +352,12 @@ void keysCommand(redisClient *c) {
         robj *keyobj;
 
         if (allkeys || stringmatchlen(pattern,plen,key,sdslen(key),0)) {
-            keyobj = createStringObject(key,sdslen(key));
+            keyobj = createStringObject(key,sdslen(key),PM_TRANS_RAM);
             if (expireIfNeeded(c->db,keyobj) == 0) {
                 addReplyBulk(c,keyobj);
                 numkeys++;
             }
-            decrRefCount(keyobj);
+            decrRefCount(keyobj,PM_TRANS_RAM);
         }
     }
     dictReleaseIterator(di);
@@ -359,25 +374,25 @@ void scanCallback(void *privdata, const dictEntry *de) {
 
     if (o == NULL) {
         sds sdskey = dictGetKey(de);
-        key = createStringObject(sdskey, sdslen(sdskey));
+        key = createStringObject(sdskey, sdslen(sdskey),PM_TRANS_RAM);
     } else if (o->type == REDIS_SET) {
         key = dictGetKey(de);
-        incrRefCount(key);
+        incrRefCount(key,PM_TRANS_RAM);
     } else if (o->type == REDIS_HASH) {
         key = dictGetKey(de);
-        incrRefCount(key);
+        incrRefCount(key,PM_TRANS_RAM);
         val = dictGetVal(de);
-        incrRefCount(val);
+        incrRefCount(val,PM_TRANS_RAM);
     } else if (o->type == REDIS_ZSET) {
         key = dictGetKey(de);
-        incrRefCount(key);
-        val = createStringObjectFromLongDouble(*(double*)dictGetVal(de),0);
+        incrRefCount(key,PM_TRANS_RAM);
+        val = createStringObjectFromLongDouble(*(double*)dictGetVal(de),0,PM_TRANS_RAM);
     } else {
         redisPanic("Type not handled in SCAN callback.");
     }
 
-    listAddNodeTail(keys, key);
-    if (val) listAddNodeTail(keys, val);
+    listAddNodeTail(keys, key,PM_TRANS_RAM);
+    if (val) listAddNodeTail(keys, val,PM_TRANS_RAM);
 }
 
 /* Try to parse a SCAN cursor stored at object 'o':
@@ -412,7 +427,7 @@ int parseScanCursorOrReply(redisClient *c, robj *o, unsigned long *cursor) {
  * of every element on the Hash. */
 void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
     int i, j;
-    list *keys = listCreate();
+    list *keys = listCreate(PM_TRANS_RAM);
     listNode *node, *nextnode;
     long count = 10;
     sds pat;
@@ -504,7 +519,7 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
         int64_t ll;
 
         while(intsetGet(o->ptr,pos++,&ll))
-            listAddNodeTail(keys,createStringObjectFromLongLong(ll));
+            listAddNodeTail(keys,createStringObjectFromLongLong(ll,PM_TRANS_RAM),PM_TRANS_RAM);
         cursor = 0;
     } else if (o->type == REDIS_HASH || o->type == REDIS_ZSET) {
         unsigned char *p = ziplistIndex(o->ptr,0);
@@ -515,8 +530,8 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
         while(p) {
             ziplistGet(p,&vstr,&vlen,&vll);
             listAddNodeTail(keys,
-                (vstr != NULL) ? createStringObject((char*)vstr,vlen) :
-                                 createStringObjectFromLongLong(vll));
+                (vstr != NULL) ? createStringObject((char*)vstr,vlen,PM_TRANS_RAM) :
+                                 createStringObjectFromLongLong(vll,PM_TRANS_RAM),PM_TRANS_RAM);
             p = ziplistNext(o->ptr,p);
         }
         cursor = 0;
@@ -551,8 +566,8 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
 
         /* Remove the element and its associted value if needed. */
         if (filter) {
-            decrRefCount(kobj);
-            listDelNode(keys, node);
+            decrRefCount(kobj,PM_TRANS_RAM);
+            listDelNode(keys, node, PM_TRANS_RAM);
         }
 
         /* If this is a hash or a sorted set, we have a flat list of
@@ -563,8 +578,8 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
             nextnode = listNextNode(node);
             if (filter) {
                 kobj = listNodeValue(node);
-                decrRefCount(kobj);
-                listDelNode(keys, node);
+                decrRefCount(kobj,PM_TRANS_RAM);
+                listDelNode(keys, node, PM_TRANS_RAM);
             }
         }
         node = nextnode;
@@ -578,13 +593,13 @@ void scanGenericCommand(redisClient *c, robj *o, unsigned long cursor) {
     while ((node = listFirst(keys)) != NULL) {
         robj *kobj = listNodeValue(node);
         addReplyBulk(c, kobj);
-        decrRefCount(kobj);
-        listDelNode(keys, node);
+        decrRefCount(kobj,PM_TRANS_RAM);
+        listDelNode(keys, node, PM_TRANS_RAM);
     }
 
 cleanup:
     listSetFreeMethod(keys,decrRefCountVoid);
-    listRelease(keys);
+    listRelease(keys,PM_TRANS_RAM);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */
@@ -663,11 +678,11 @@ void renameGenericCommand(redisClient *c, int nx) {
     if ((o = lookupKeyWriteOrReply(c,c->argv[1],shared.nokeyerr)) == NULL)
         return;
 
-    incrRefCount(o);
+    incrRefCount(o,PM_TRANS_RAM);
     expire = getExpire(c->db,c->argv[1]);
     if (lookupKeyWrite(c->db,c->argv[2]) != NULL) {
         if (nx) {
-            decrRefCount(o);
+            decrRefCount(o,PM_TRANS_RAM);
             addReply(c,shared.czero);
             return;
         }
@@ -675,7 +690,7 @@ void renameGenericCommand(redisClient *c, int nx) {
          * with the same name. */
         dbDelete(c->db,c->argv[2]);
     }
-    dbAdd(c->db,c->argv[2],o);
+    dbAdd(c->db,c->argv[2],o, PM_TRANS_RAM);
     if (expire != -1) setExpire(c->db,c->argv[2],expire);
     dbDelete(c->db,c->argv[1]);
     signalModifiedKey(c->db,c->argv[1]);
@@ -736,9 +751,9 @@ void moveCommand(redisClient *c) {
         addReply(c,shared.czero);
         return;
     }
-    dbAdd(dst,c->argv[1],o);
+    dbAdd(dst,c->argv[1],o,PM_TRANS_RAM);
     if (expire != -1) setExpire(dst,c->argv[1],expire);
-    incrRefCount(o);
+    incrRefCount(o,PM_TRANS_RAM);
 
     /* OK! key moved, free the entry in the source DB */
     dbDelete(src,c->argv[1]);
@@ -763,7 +778,7 @@ void setExpire(redisDb *db, robj *key, long long when) {
     /* Reuse the sds from the main dict in the expire dict */
     kde = dictFind(db->dict,key->ptr);
     redisAssertWithInfo(NULL,key,kde != NULL);
-    de = dictReplaceRaw(db->expires,dictGetKey(kde));
+    de = dictReplaceRaw(db->expires,dictGetKey(kde),PM_TRANS_RAM);
     dictSetSignedIntegerVal(de,when);
 }
 
@@ -795,15 +810,15 @@ void propagateExpire(redisDb *db, robj *key) {
 
     argv[0] = shared.del;
     argv[1] = key;
-    incrRefCount(argv[0]);
-    incrRefCount(argv[1]);
+    incrRefCount(argv[0],PM_TRANS_RAM);
+    incrRefCount(argv[1],PM_TRANS_RAM);
 
     if (server.aof_state != REDIS_AOF_OFF)
         feedAppendOnlyFile(server.delCommand,db->id,argv,2);
     replicationFeedSlaves(server.slaves,db->id,argv,2);
 
-    decrRefCount(argv[0]);
-    decrRefCount(argv[1]);
+    decrRefCount(argv[0],PM_TRANS_RAM);
+    decrRefCount(argv[1],PM_TRANS_RAM);
 }
 
 int expireIfNeeded(redisDb *db, robj *key) {
@@ -882,9 +897,9 @@ void expireGenericCommand(redisClient *c, long long basetime, int unit) {
         server.dirty++;
 
         /* Replicate/AOF this as an explicit DEL. */
-        aux = createStringObject("DEL",3);
+        aux = createStringObject("DEL",3,PM_TRANS_RAM);
         rewriteClientCommandVector(c,2,aux,key);
-        decrRefCount(aux);
+        decrRefCount(aux,PM_TRANS_RAM);
         signalModifiedKey(c->db,key);
         notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",key,c->db->id);
         addReply(c, shared.cone);

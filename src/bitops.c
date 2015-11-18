@@ -219,11 +219,11 @@ void setbitCommand(redisClient *c) {
 
     o = lookupKeyWrite(c->db,c->argv[1]);
     if (o == NULL) {
-        o = createObject(REDIS_STRING,sdsempty());
-        dbAdd(c->db,c->argv[1],o);
+        o = createObject(REDIS_STRING,sdsempty(PM_TRANS_RAM),PM_TRANS_RAM);
+        dbAdd(c->db,c->argv[1],o,PM_TRANS_RAM);
     } else {
         if (checkType(c,o,REDIS_STRING)) return;
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
+        o = dbUnshareStringValue(c->db,c->argv[1],o,PM_TRANS_RAM);
     }
 
     /* Grow sds value to the right length if necessary */
@@ -321,17 +321,18 @@ void bitopCommand(redisClient *c) {
         }
         /* Return an error if one of the keys is not a string. */
         if (checkType(c,o,REDIS_STRING)) {
+
             unsigned long i;
             for (i = 0; i < j; i++) {
                 if (objects[i])
-                    decrRefCount(objects[i]);
+                    decrRefCount(objects[i],PM_TRANS_RAM);
             }
             zfree(src);
             zfree(len);
             zfree(objects);
             return;
         }
-        objects[j] = getDecodedObject(o);
+        objects[j] = getDecodedObject(o,PM_TRANS_RAM);
         src[j] = objects[j]->ptr;
         len[j] = sdslen(objects[j]->ptr);
         if (len[j] > maxlen) maxlen = len[j];
@@ -340,7 +341,7 @@ void bitopCommand(redisClient *c) {
 
     /* Compute the bit operation, if at least one string is not empty. */
     if (maxlen) {
-        res = (unsigned char*) sdsnewlen(NULL,maxlen);
+        res = (unsigned char*) sdsnewlen(NULL,maxlen,PM_TRANS_RAM);
         unsigned char output, byte;
         unsigned long i;
 
@@ -426,7 +427,7 @@ void bitopCommand(redisClient *c) {
     }
     for (j = 0; j < numkeys; j++) {
         if (objects[j])
-            decrRefCount(objects[j]);
+            decrRefCount(objects[j],PM_TRANS_RAM);
     }
     zfree(src);
     zfree(len);
@@ -434,10 +435,10 @@ void bitopCommand(redisClient *c) {
 
     /* Store the computed value into the target key */
     if (maxlen) {
-        o = createObject(REDIS_STRING,res);
-        setKey(c->db,targetkey,o);
+        o = createObject(REDIS_STRING,res,PM_TRANS_RAM);
+        setKey(c->db,targetkey,o,PM_TRANS_RAM);
         notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"set",targetkey,c->db->id);
-        decrRefCount(o);
+        decrRefCount(o,PM_TRANS_RAM);
     } else if (dbDelete(c->db,targetkey)) {
         signalModifiedKey(c->db,targetkey);
         notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",targetkey,c->db->id);

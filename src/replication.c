@@ -189,9 +189,9 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
             dictid_len = ll2string(llstr,sizeof(llstr),dictid);
             selectcmd = createObject(REDIS_STRING,
-                sdscatprintf(sdsempty(),
+                sdscatprintf(sdsempty(PM_TRANS_RAM),
                 "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
-                dictid_len, llstr));
+                dictid_len, llstr),PM_TRANS_RAM);
         }
 
         /* Add the SELECT command into the backlog. */
@@ -206,7 +206,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
 
         if (dictid < 0 || dictid >= REDIS_SHARED_SELECT_CMDS)
-            decrRefCount(selectcmd);
+            decrRefCount(selectcmd,PM_TRANS_RAM);
     }
     server.slaveseldb = dictid;
 
@@ -263,7 +263,7 @@ void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **
     listNode *ln;
     listIter li;
     int j;
-    sds cmdrepr = sdsnew("+");
+    sds cmdrepr = sdsnew("+",PM_TRANS_RAM);
     robj *cmdobj;
     struct timeval tv;
 
@@ -288,14 +288,14 @@ void replicationFeedMonitors(redisClient *c, list *monitors, int dictid, robj **
             cmdrepr = sdscatlen(cmdrepr," ",1);
     }
     cmdrepr = sdscatlen(cmdrepr,"\r\n",2);
-    cmdobj = createObject(REDIS_STRING,cmdrepr);
+    cmdobj = createObject(REDIS_STRING,cmdrepr,PM_TRANS_RAM);
 
     listRewind(monitors,&li);
     while((ln = listNext(&li))) {
         redisClient *monitor = ln->value;
         addReply(monitor,cmdobj);
     }
-    decrRefCount(cmdobj);
+    decrRefCount(cmdobj,PM_TRANS_RAM);
 }
 
 /* Feed the slave 'c' with the replication backlog starting from the
@@ -343,7 +343,7 @@ long long addReplyReplicationBacklog(redisClient *c, long long offset) {
             (server.repl_backlog_size - j) : len;
 
         redisLog(REDIS_DEBUG, "[PSYNC] addReply() length: %lld", thislen);
-        addReplySds(c,sdsnewlen(server.repl_backlog + j, thislen));
+        addReplySds(c,sdsnewlen(server.repl_backlog + j, thislen,PM_TRANS_RAM));
         len -= thislen;
         j = 0;
     }
@@ -453,7 +453,7 @@ int masterTryPartialResynchronization(redisClient *c) {
     c->replstate = REDIS_REPL_ONLINE;
     c->repl_ack_time = server.unixtime;
     c->repl_put_online_on_ack = 0;
-    listAddNodeTail(server.slaves,c);
+    listAddNodeTail(server.slaves,c,PM_TRANS_RAM);
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
      * empty so this write will never fail actually. */
@@ -525,7 +525,7 @@ int startBgsaveForReplication(int mincapa) {
 
             if (slave->replstate == REDIS_REPL_WAIT_BGSAVE_START) {
                 slave->flags &= ~REDIS_SLAVE;
-                listDelNode(server.slaves,ln);
+                listDelNode(server.slaves,ln,PM_TRANS_RAM);
                 addReplyError(slave,
                     "BGSAVE failed, replication can't continue");
                 slave->flags |= REDIS_CLOSE_AFTER_REPLY;
@@ -617,7 +617,7 @@ void syncCommand(redisClient *c) {
         anetDisableTcpNoDelay(NULL, c->fd); /* Non critical if it fails. */
     c->repldbfd = -1;
     c->flags |= REDIS_SLAVE;
-    listAddNodeTail(server.slaves,c);
+    listAddNodeTail(server.slaves,c,PM_TRANS_RAM);
 
     /* CASE 1: BGSAVE is in progress, with disk target. */
     if (server.rdb_child_pid != -1 &&
@@ -789,7 +789,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
         server.stat_net_output_bytes += nwritten;
         sdsrange(slave->replpreamble,nwritten,-1);
         if (sdslen(slave->replpreamble) == 0) {
-            sdsfree(slave->replpreamble);
+            sdsfree(slave->replpreamble,PM_TRANS_RAM);
             slave->replpreamble = NULL;
             /* fall through sending data. */
         } else {
@@ -887,7 +887,7 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 slave->repldboff = 0;
                 slave->repldbsize = buf.st_size;
                 slave->replstate = REDIS_REPL_SEND_BULK;
-                slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
+                slave->replpreamble = sdscatprintf(sdsempty(PM_TRANS_RAM),"$%lld\r\n",
                     (unsigned long long) slave->repldbsize);
 
                 aeDeleteFileEvent(server.el,slave->fd,AE_WRITABLE);
@@ -1163,7 +1163,7 @@ char *sendSynchronousCommand(int flags, int fd, ...) {
     if (flags & SYNC_CMD_WRITE) {
         char *arg;
         va_list ap;
-        sds cmd = sdsempty();
+        sds cmd = sdsempty(PM_TRANS_RAM);
         va_start(ap,fd);
 
         while(1) {
@@ -1179,11 +1179,11 @@ char *sendSynchronousCommand(int flags, int fd, ...) {
         if (syncWrite(fd,cmd,sdslen(cmd),server.repl_syncio_timeout*1000)
             == -1)
         {
-            sdsfree(cmd);
-            return sdscatprintf(sdsempty(),"-Writing to master: %s",
+            sdsfree(cmd,PM_TRANS_RAM);
+            return sdscatprintf(sdsempty(PM_TRANS_RAM),"-Writing to master: %s",
                     strerror(errno));
         }
-        sdsfree(cmd);
+        sdsfree(cmd,PM_TRANS_RAM);
         va_end(ap);
     }
 
@@ -1194,11 +1194,11 @@ char *sendSynchronousCommand(int flags, int fd, ...) {
         if (syncReadLine(fd,buf,sizeof(buf),server.repl_syncio_timeout*1000)
             == -1)
         {
-            return sdscatprintf(sdsempty(),"-Reading from master: %s",
+            return sdscatprintf(sdsempty(PM_TRANS_RAM),"-Reading from master: %s",
                     strerror(errno));
         }
         server.repl_transfer_lastio = server.unixtime;
-        return sdsnew(buf);
+        return sdsnew(buf,PM_TRANS_RAM);
     }
     return NULL;
 }
@@ -1283,7 +1283,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         reply = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"PSYNC",psync_runid,psync_offset,NULL);
         if (reply != NULL) {
             redisLog(REDIS_WARNING,"Unable to send PSYNC to master: %s",reply);
-            sdsfree(reply);
+            sdsfree(reply,PM_TRANS_RAM);
             aeDeleteFileEvent(server.el,fd,AE_READABLE);
             return PSYNC_WRITE_ERROR;
         }
@@ -1295,7 +1295,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
     if (sdslen(reply) == 0) {
         /* The master may send empty newlines after it receives PSYNC
          * and before to reply, just to keep the connection alive. */
-        sdsfree(reply);
+        sdsfree(reply,PM_TRANS_RAM);
         return PSYNC_WAIT_REPLY;
     }
 
@@ -1330,7 +1330,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         }
         /* We are going to full resync, discard the cached master structure. */
         replicationDiscardCachedMaster();
-        sdsfree(reply);
+        sdsfree(reply,PM_TRANS_RAM);
         return PSYNC_FULLRESYNC;
     }
 
@@ -1338,7 +1338,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         /* Partial resync was accepted, set the replication state accordingly */
         redisLog(REDIS_NOTICE,
             "Successful partial resynchronization with master.");
-        sdsfree(reply);
+        sdsfree(reply,PM_TRANS_RAM);
         replicationResurrectCachedMaster(fd);
         return PSYNC_CONTINUE;
     }
@@ -1356,7 +1356,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
             "Master does not support PSYNC or is in "
             "error state (reply: %s)", reply);
     }
-    sdsfree(reply);
+    sdsfree(reply,PM_TRANS_RAM);
     replicationDiscardCachedMaster();
     return PSYNC_NOT_SUPPORTED;
 }
@@ -1414,13 +1414,13 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
             strncmp(err,"-ERR operation not permitted",28) != 0)
         {
             redisLog(REDIS_WARNING,"Error reply to PING from master: '%s'",err);
-            sdsfree(err);
+            sdsfree(err,PM_TRANS_RAM);
             goto error;
         } else {
             redisLog(REDIS_NOTICE,
                 "Master replied to PING, replication can continue...");
         }
-        sdsfree(err);
+        sdsfree(err,PM_TRANS_RAM);
         server.repl_state = REDIS_REPL_SEND_AUTH;
     }
 
@@ -1441,22 +1441,22 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         err = sendSynchronousCommand(SYNC_CMD_READ,fd,NULL);
         if (err[0] == '-') {
             redisLog(REDIS_WARNING,"Unable to AUTH to MASTER: %s",err);
-            sdsfree(err);
+            sdsfree(err,PM_TRANS_RAM);
             goto error;
         }
-        sdsfree(err);
+        sdsfree(err,PM_TRANS_RAM);
         server.repl_state = REDIS_REPL_SEND_PORT;
     }
 
     /* Set the slave port, so that Master's INFO command can list the
      * slave listening port correctly. */
     if (server.repl_state == REDIS_REPL_SEND_PORT) {
-        sds port = sdsfromlonglong(server.port);
+        sds port = sdsfromlonglong(server.port,PM_TRANS_RAM);
         err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"REPLCONF",
                 "listening-port",port, NULL);
-        sdsfree(port);
+        sdsfree(port,PM_TRANS_RAM);
         if (err) goto write_error;
-        sdsfree(err);
+        sdsfree(err,PM_TRANS_RAM);
         server.repl_state = REDIS_REPL_RECEIVE_PORT;
         return;
     }
@@ -1470,7 +1470,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
             redisLog(REDIS_NOTICE,"(Non critical) Master does not understand "
                                   "REPLCONF listening-port: %s", err);
         }
-        sdsfree(err);
+        sdsfree(err,PM_TRANS_RAM);
         server.repl_state = REDIS_REPL_SEND_CAPA;
     }
 
@@ -1482,7 +1482,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         err = sendSynchronousCommand(SYNC_CMD_WRITE,fd,"REPLCONF",
                 "capa","eof",NULL);
         if (err) goto write_error;
-        sdsfree(err);
+        sdsfree(err,PM_TRANS_RAM);
         server.repl_state = REDIS_REPL_RECEIVE_CAPA;
         return;
     }
@@ -1496,7 +1496,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
             redisLog(REDIS_NOTICE,"(Non critical) Master does not understand "
                                   "REPLCONF capa: %s", err);
         }
-        sdsfree(err);
+        sdsfree(err,PM_TRANS_RAM);
         server.repl_state = REDIS_REPL_SEND_PSYNC;
     }
 
@@ -1507,7 +1507,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
      * reconnection attempt. */
     if (server.repl_state == REDIS_REPL_SEND_PSYNC) {
         if (slaveTryPartialResynchronization(fd,0) == PSYNC_WRITE_ERROR) {
-            err = sdsnew("Write error sending the PSYNC command.");
+            err = sdsnew("Write error sending the PSYNC command.",PM_TRANS_RAM);
             goto write_error;
         }
         server.repl_state = REDIS_REPL_RECEIVE_PSYNC;
@@ -1593,7 +1593,7 @@ error:
 
 write_error: /* Handle sendSynchronousCommand(SYNC_CMD_WRITE) errors. */
     redisLog(REDIS_WARNING,"Sending command to master in replication handshake: %s", err);
-    sdsfree(err);
+    sdsfree(err,PM_TRANS_RAM);
     goto error;
 }
 
@@ -1673,7 +1673,7 @@ void disconnectAllBlockedClients(void) {
         if (c->flags & REDIS_BLOCKED) {
             addReplySds(c,sdsnew(
                 "-UNBLOCKED force unblock from blocking operation, "
-                "instance state changed (master -> slave?)\r\n"));
+                "instance state changed (master -> slave?)\r\n",PM_TRANS_RAM));
             unblockClientWaitingData(c);
             c->flags |= REDIS_CLOSE_AFTER_REPLY;
         }
@@ -1682,8 +1682,8 @@ void disconnectAllBlockedClients(void) {
 
 /* Set replication to the specified master address and port. */
 void replicationSetMaster(char *ip, int port) {
-    sdsfree(server.masterhost);
-    server.masterhost = sdsdup(ip);
+    sdsfree(server.masterhost,PM_TRANS_RAM);
+    server.masterhost = sdsdup(ip,PM_TRANS_RAM);
     server.masterport = port;
     if (server.master) freeClient(server.master);
     disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
@@ -1698,7 +1698,7 @@ void replicationSetMaster(char *ip, int port) {
 /* Cancel replication, setting the instance as a master itself. */
 void replicationUnsetMaster(void) {
     if (server.masterhost == NULL) return; /* Nothing to do. */
-    sdsfree(server.masterhost);
+    sdsfree(server.masterhost,PM_TRANS_RAM);
     server.masterhost = NULL;
     if (server.master) {
         if (listLength(server.slaves) == 0) {
@@ -1732,10 +1732,10 @@ void slaveofCommand(redisClient *c) {
         !strcasecmp(c->argv[2]->ptr,"one")) {
         if (server.masterhost) {
             replicationUnsetMaster();
-            sds client = catClientInfoString(sdsempty(),c);
+            sds client = catClientInfoString(sdsempty(PM_TRANS_RAM),c);
             redisLog(REDIS_NOTICE,
                 "MASTER MODE enabled (user request from '%s')",client);
-            sdsfree(client);
+            sdsfree(client,PM_TRANS_RAM);
         }
     } else {
         long port;
@@ -1747,16 +1747,16 @@ void slaveofCommand(redisClient *c) {
         if (server.masterhost && !strcasecmp(server.masterhost,c->argv[1]->ptr)
             && server.masterport == port) {
             redisLog(REDIS_NOTICE,"SLAVE OF would result into synchronization with the master we are already connected with. No operation performed.");
-            addReplySds(c,sdsnew("+OK Already connected to specified master\r\n"));
+            addReplySds(c,sdsnew("+OK Already connected to specified master\r\n",PM_TRANS_RAM));
             return;
         }
         /* There was no previous master or the user specified a different one,
          * we can continue. */
         replicationSetMaster(c->argv[1]->ptr, port);
-        sds client = catClientInfoString(sdsempty(),c);
+        sds client = catClientInfoString(sdsempty(PM_TRANS_RAM),c);
         redisLog(REDIS_NOTICE,"SLAVE OF %s:%d enabled (user request from '%s')",
             server.masterhost, server.masterport, client);
-        sdsfree(client);
+        sdsfree(client,PM_TRANS_RAM);
     }
     addReply(c,shared.ok);
 }
@@ -1859,7 +1859,7 @@ void replicationCacheMaster(redisClient *c) {
      * listed by CLIENT LIST or processed in any way by batch operations. */
     ln = listSearchKey(server.clients,c);
     redisAssert(ln != NULL);
-    listDelNode(server.clients,ln);
+    listDelNode(server.clients,ln,PM_TRANS_RAM);
 
     /* Save the master. Server.master will be set to null later by
      * replicationHandleMasterDisconnection(). */
@@ -1876,7 +1876,7 @@ void replicationCacheMaster(redisClient *c) {
 
     /* Invalidate the Peer ID cache. */
     if (c->peerid) {
-        sdsfree(c->peerid);
+        sdsfree(c->peerid,PM_TRANS_RAM);
         c->peerid = NULL;
     }
 
@@ -1913,7 +1913,7 @@ void replicationResurrectCachedMaster(int newfd) {
     server.repl_state = REDIS_REPL_CONNECTED;
 
     /* Re-add to the list of clients. */
-    listAddNodeTail(server.clients,server.master);
+    listAddNodeTail(server.clients,server.master,PM_TRANS_RAM);
     if (aeCreateFileEvent(server.el, newfd, AE_READABLE,
                           readQueryFromClient, server.master)) {
         redisLog(REDIS_WARNING,"Error resurrecting the cached master, impossible to add the readable handler: %s", strerror(errno));
@@ -1990,7 +1990,7 @@ void refreshGoodSlavesCount(void) {
 void replicationScriptCacheInit(void) {
     server.repl_scriptcache_size = 10000;
     server.repl_scriptcache_dict = dictCreate(&replScriptCacheDictType,NULL);
-    server.repl_scriptcache_fifo = listCreate();
+    server.repl_scriptcache_fifo = listCreate(PM_TRANS_RAM);
 }
 
 /* Empty the script cache. Should be called every time we are no longer sure
@@ -2006,15 +2006,15 @@ void replicationScriptCacheInit(void) {
  */
 void replicationScriptCacheFlush(void) {
     dictEmpty(server.repl_scriptcache_dict,NULL);
-    listRelease(server.repl_scriptcache_fifo);
-    server.repl_scriptcache_fifo = listCreate();
+    listRelease(server.repl_scriptcache_fifo,PM_TRANS_RAM);
+    server.repl_scriptcache_fifo = listCreate(PM_TRANS_RAM);
 }
 
 /* Add an entry into the script cache, if we reach max number of entries the
  * oldest is removed from the list. */
 void replicationScriptCacheAdd(sds sha1) {
     int retval;
-    sds key = sdsdup(sha1);
+    sds key = sdsdup(sha1,PM_TRANS_RAM);
 
     /* Evict oldest. */
     if (listLength(server.repl_scriptcache_fifo) == server.repl_scriptcache_size)
@@ -2024,12 +2024,12 @@ void replicationScriptCacheAdd(sds sha1) {
 
         retval = dictDelete(server.repl_scriptcache_dict,oldest);
         redisAssert(retval == DICT_OK);
-        listDelNode(server.repl_scriptcache_fifo,ln);
+        listDelNode(server.repl_scriptcache_fifo,ln,PM_TRANS_RAM);
     }
 
     /* Add current. */
-    retval = dictAdd(server.repl_scriptcache_dict,key,NULL);
-    listAddNodeHead(server.repl_scriptcache_fifo,key);
+    retval = dictAdd(server.repl_scriptcache_dict,key,NULL,PM_TRANS_RAM);
+    listAddNodeHead(server.repl_scriptcache_fifo,key,PM_TRANS_RAM);
     redisAssert(retval == DICT_OK);
 }
 
@@ -2097,10 +2097,10 @@ void replicationCron(void) {
 
     /* First, send PING according to ping_slave_period. */
     if ((replication_cron_loops % server.repl_ping_slave_period) == 0) {
-        ping_argv[0] = createStringObject("PING",4);
+        ping_argv[0] = createStringObject("PING",4,PM_TRANS_RAM);
         replicationFeedSlaves(server.slaves, server.slaveseldb,
             ping_argv, 1);
-        decrRefCount(ping_argv[0]);
+        decrRefCount(ping_argv[0],PM_TRANS_RAM);
     }
 
     /* Second, send a newline to all the slaves in pre-synchronization

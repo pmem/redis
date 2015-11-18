@@ -51,6 +51,7 @@
 #include <sys/resource.h>
 #include <sys/utsname.h>
 #include <locale.h>
+#include <sys/mman.h>
 
 /* Our shared "common" objects */
 
@@ -397,10 +398,10 @@ void dictVanillaFree(void *privdata, void *val)
     zfree(val);
 }
 
-void dictListDestructor(void *privdata, void *val)
+void dictListDestructor(void *privdata, void *val, PM_TRANS trans)
 {
     DICT_NOTUSED(privdata);
-    listRelease((list*)val);
+    listRelease((list*)val, trans);
 }
 
 int dictSdsKeyCompare(void *privdata, const void *key1,
@@ -425,19 +426,18 @@ int dictSdsKeyCaseCompare(void *privdata, const void *key1,
     return strcasecmp(key1, key2) == 0;
 }
 
-void dictRedisObjectDestructor(void *privdata, void *val)
+void dictRedisObjectDestructor(void *privdata, void *val, PM_TRANS trans)
 {
     DICT_NOTUSED(privdata);
 
     if (val == NULL) return; /* Values of swapped out keys as set to NULL */
-    decrRefCount(val);
+    decrRefCount(val,trans);
 }
 
-void dictSdsDestructor(void *privdata, void *val)
+void dictSdsDestructor(void *privdata, void *val, PM_TRANS trans)
 {
     DICT_NOTUSED(privdata);
-
-    sdsfree(val);
+    sdsfree(val,trans);
 }
 
 int dictObjKeyCompare(void *privdata, const void *key1,
@@ -470,11 +470,11 @@ int dictEncObjKeyCompare(void *privdata, const void *key1,
         o2->encoding == REDIS_ENCODING_INT)
             return o1->ptr == o2->ptr;
 
-    o1 = getDecodedObject(o1);
-    o2 = getDecodedObject(o2);
+    o1 = getDecodedObject(o1, PM_TRANS_RAM);
+    o2 = getDecodedObject(o2, PM_TRANS_RAM);
     cmp = dictSdsKeyCompare(privdata,o1->ptr,o2->ptr);
-    decrRefCount(o1);
-    decrRefCount(o2);
+    decrRefCount(o1, PM_TRANS_RAM);
+    decrRefCount(o2, PM_TRANS_RAM);
     return cmp;
 }
 
@@ -493,9 +493,9 @@ unsigned int dictEncObjHash(const void *key) {
         } else {
             unsigned int hash;
 
-            o = getDecodedObject(o);
+            o = getDecodedObject(o, PM_TRANS_RAM);
             hash = dictGenHashFunction(o->ptr, sdslen((sds)o->ptr));
-            decrRefCount(o);
+            decrRefCount(o, PM_TRANS_RAM);
             return hash;
         }
     }
@@ -508,7 +508,8 @@ dictType setDictType = {
     NULL,                      /* val dup */
     dictEncObjKeyCompare,      /* key compare */
     dictRedisObjectDestructor, /* key destructor */
-    NULL                       /* val destructor */
+    NULL,                      /* val destructor */
+    0                          /* use persistent memory*/
 };
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
@@ -518,17 +519,20 @@ dictType zsetDictType = {
     NULL,                      /* val dup */
     dictEncObjKeyCompare,      /* key compare */
     dictRedisObjectDestructor, /* key destructor */
-    NULL                       /* val destructor */
+    NULL,                      /* val destructor */
+    0                          /* use persistent memory*/
 };
 
 /* Db->dict, keys are sds strings, vals are Redis objects. */
+/* Keep data in persistent memory*/
 dictType dbDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
     NULL,                       /* val dup */
     dictSdsKeyCompare,          /* key compare */
-    dictSdsDestructor,          /* key destructor */
-    dictRedisObjectDestructor   /* val destructor */
+    dictSdsDestructor,          /* key destructor pointer can be change in realtimeon dictSdsDestructor_pm if pm work*/
+    dictRedisObjectDestructor,  /* val destructor  pointer can be change in realtimeon dictRedisObjectDestructor_pm if pm work*/
+    0                           /* dic keep in Persistent memory on in heap. Value can be change in realtime if pm work*/
 };
 
 /* server.lua_scripts sha (as sds string) -> scripts (as robj) cache. */
@@ -538,7 +542,8 @@ dictType shaScriptObjectDictType = {
     NULL,                       /* val dup */
     dictSdsKeyCaseCompare,      /* key compare */
     dictSdsDestructor,          /* key destructor */
-    dictRedisObjectDestructor   /* val destructor */
+    dictRedisObjectDestructor,  /* val destructor */
+    0                          /* use persistent memory*/
 };
 
 /* Db->expires */
@@ -548,7 +553,8 @@ dictType keyptrDictType = {
     NULL,                      /* val dup */
     dictSdsKeyCompare,         /* key compare */
     NULL,                      /* key destructor */
-    NULL                       /* val destructor */
+    NULL,                      /* val destructor */
+    0                          /* use persistent memory*/
 };
 
 /* Command table. sds string -> command struct pointer. */
@@ -558,7 +564,8 @@ dictType commandTableDictType = {
     NULL,                      /* val dup */
     dictSdsKeyCaseCompare,     /* key compare */
     dictSdsDestructor,         /* key destructor */
-    NULL                       /* val destructor */
+    NULL,                      /* val destructor */
+    0                          /* use persistent memory*/
 };
 
 /* Hash type hash table (note that small hashes are represented with ziplists) */
@@ -568,7 +575,8 @@ dictType hashDictType = {
     NULL,                       /* val dup */
     dictEncObjKeyCompare,       /* key compare */
     dictRedisObjectDestructor,  /* key destructor */
-    dictRedisObjectDestructor   /* val destructor */
+    dictRedisObjectDestructor,  /* val destructor */
+    0                          /* use persistent memory*/
 };
 
 /* Keylist hash table type has unencoded redis objects as keys and
@@ -580,7 +588,8 @@ dictType keylistDictType = {
     NULL,                       /* val dup */
     dictObjKeyCompare,          /* key compare */
     dictRedisObjectDestructor,  /* key destructor */
-    dictListDestructor          /* val destructor */
+    dictListDestructor,         /* val destructor */
+    0                          /* use persistent memory*/
 };
 
 /* Replication cached script dict (server.repl_scriptcache_dict).
@@ -592,7 +601,8 @@ dictType replScriptCacheDictType = {
     NULL,                       /* val dup */
     dictSdsKeyCaseCompare,      /* key compare */
     dictSdsDestructor,          /* key destructor */
-    NULL                        /* val destructor */
+    NULL,                       /* val destructor */
+    0                          /* use persistent memory*/
 };
 
 int htNeedsResize(dict *dict) {
@@ -663,14 +673,16 @@ void updateDictResizePolicy(void) {
 int activeExpireCycleTryExpire(redisDb *db, struct dictEntry *de, long long now) {
     long long t = dictGetSignedIntegerVal(de);
     if (now > t) {
+
         sds key = dictGetKey(de);
-        robj *keyobj = createStringObject(key,sdslen(key));
+        robj *keyobj = createStringObject(key,sdslen(key),PM_TRANS_RAM);
 
         propagateExpire(db,keyobj);
         dbDelete(db,keyobj);
         notifyKeyspaceEvent(REDIS_NOTIFY_EXPIRED,
             "expired",keyobj,db->id);
-        decrRefCount(keyobj);
+
+        decrRefCount(keyobj,PM_TRANS_RAM);
         server.stat_expiredkeys++;
         return 1;
     } else {
@@ -891,7 +903,7 @@ int clientsCronResizeQueryBuffer(redisClient *c) {
     {
         /* Only resize the query buffer if it is actually wasting space. */
         if (sdsavail(c->querybuf) > 1024) {
-            c->querybuf = sdsRemoveFreeSpace(c->querybuf);
+            c->querybuf = sdsRemoveFreeSpace(c->querybuf,PM_TRANS_RAM);
         }
     }
     /* Reset the peak again to capture the peak memory usage in the next
@@ -1089,6 +1101,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 &&
         server.aof_rewrite_scheduled)
     {
+        redisLog(REDIS_NOTICE,"Starting scheduled automatic rewriting of AOF.");
         rewriteAppendOnlyFileBackground();
     }
 
@@ -1138,7 +1151,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
          }
 
          /* Trigger an AOF rewrite if needed */
-         if (server.rdb_child_pid == -1 &&
+         if (server.aof_state == REDIS_AOF_ON &&
+             server.rdb_child_pid == -1 &&
              server.aof_child_pid == -1 &&
              server.aof_rewrite_perc &&
              server.aof_current_size > server.aof_rewrite_min_size)
@@ -1147,7 +1161,8 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                             server.aof_rewrite_base_size : 1;
             long long growth = (server.aof_current_size*100/base) - 100;
             if (growth >= server.aof_rewrite_perc) {
-                redisLog(REDIS_NOTICE,"Starting automatic rewriting of AOF on %lld%% growth",growth);
+                redisLog(REDIS_NOTICE,"Starting automatic rewriting of AOF on %lld%% growth (old=%zu, new=%zu)",
+                        growth, server.aof_rewrite_base_size, server.aof_current_size);
                 rewriteAppendOnlyFileBackground();
             }
          }
@@ -1201,7 +1216,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         ln = listFirst(server.unblocked_clients);
         redisAssert(ln != NULL);
         c = ln->value;
-        listDelNode(server.unblocked_clients,ln);
+        listDelNode(server.unblocked_clients,ln,PM_TRANS_RAM);
         c->flags &= ~REDIS_UNBLOCKED;
 
         /* Process remaining data in the input buffer. */
@@ -1221,52 +1236,54 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 void createSharedObjects(void) {
     int j;
 
-    shared.crlf = createObject(REDIS_STRING,sdsnew("\r\n"));
-    shared.ok = createObject(REDIS_STRING,sdsnew("+OK\r\n"));
-    shared.err = createObject(REDIS_STRING,sdsnew("-ERR\r\n"));
-    shared.emptybulk = createObject(REDIS_STRING,sdsnew("$0\r\n\r\n"));
-    shared.czero = createObject(REDIS_STRING,sdsnew(":0\r\n"));
-    shared.cone = createObject(REDIS_STRING,sdsnew(":1\r\n"));
-    shared.cnegone = createObject(REDIS_STRING,sdsnew(":-1\r\n"));
-    shared.nullbulk = createObject(REDIS_STRING,sdsnew("$-1\r\n"));
-    shared.nullmultibulk = createObject(REDIS_STRING,sdsnew("*-1\r\n"));
-    shared.emptymultibulk = createObject(REDIS_STRING,sdsnew("*0\r\n"));
-    shared.pong = createObject(REDIS_STRING,sdsnew("+PONG\r\n"));
-    shared.queued = createObject(REDIS_STRING,sdsnew("+QUEUED\r\n"));
-    shared.emptyscan = createObject(REDIS_STRING,sdsnew("*2\r\n$1\r\n0\r\n*0\r\n"));
+    shared.crlf = createObject(REDIS_STRING,sdsnew("\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.ok = createObject(REDIS_STRING,sdsnew("+OK\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.err = createObject(REDIS_STRING,sdsnew("-ERR\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.emptybulk = createObject(REDIS_STRING,sdsnew("$0\r\n\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.czero = createObject(REDIS_STRING,sdsnew(":0\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.cone = createObject(REDIS_STRING,sdsnew(":1\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.cnegone = createObject(REDIS_STRING,sdsnew(":-1\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.nullbulk = createObject(REDIS_STRING,sdsnew("$-1\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.nullmultibulk = createObject(REDIS_STRING,sdsnew("*-1\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.emptymultibulk = createObject(REDIS_STRING,sdsnew("*0\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.pong = createObject(REDIS_STRING,sdsnew("+PONG\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.queued = createObject(REDIS_STRING,sdsnew("+QUEUED\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.emptyscan = createObject(REDIS_STRING,sdsnew("*2\r\n$1\r\n0\r\n*0\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.wrongtypeerr = createObject(REDIS_STRING,sdsnew(
-        "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"));
+        "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.nokeyerr = createObject(REDIS_STRING,sdsnew(
-        "-ERR no such key\r\n"));
+        "-ERR no such key\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.syntaxerr = createObject(REDIS_STRING,sdsnew(
-        "-ERR syntax error\r\n"));
+        "-ERR syntax error\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.sameobjecterr = createObject(REDIS_STRING,sdsnew(
-        "-ERR source and destination objects are the same\r\n"));
+        "-ERR source and destination objects are the same\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.outofrangeerr = createObject(REDIS_STRING,sdsnew(
-        "-ERR index out of range\r\n"));
+        "-ERR index out of range\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.noscripterr = createObject(REDIS_STRING,sdsnew(
-        "-NOSCRIPT No matching script. Please use EVAL.\r\n"));
+        "-NOSCRIPT No matching script. Please use EVAL.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.loadingerr = createObject(REDIS_STRING,sdsnew(
-        "-LOADING Redis is loading the dataset in memory\r\n"));
+        "-LOADING Redis is loading the dataset in memory\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.slowscripterr = createObject(REDIS_STRING,sdsnew(
-        "-BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n"));
+        "-BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.masterdownerr = createObject(REDIS_STRING,sdsnew(
-        "-MASTERDOWN Link with MASTER is down and slave-serve-stale-data is set to 'no'.\r\n"));
+        "-MASTERDOWN Link with MASTER is down and slave-serve-stale-data is set to 'no'.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.bgsaveerr = createObject(REDIS_STRING,sdsnew(
-        "-MISCONF Redis is configured to save RDB snapshots, but is currently not able to persist on disk. Commands that may modify the data set are disabled. Please check Redis logs for details about the error.\r\n"));
+        "-MISCONF Redis is configured to save RDB snapshots, but is currently not able to persist on disk. Commands that may modify the data set are disabled. Please check Redis logs for details about the error.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.roslaveerr = createObject(REDIS_STRING,sdsnew(
-        "-READONLY You can't write against a read only slave.\r\n"));
+        "-READONLY You can't write against a read only slave.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.noautherr = createObject(REDIS_STRING,sdsnew(
-        "-NOAUTH Authentication required.\r\n"));
+        "-NOAUTH Authentication required.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.oomerr = createObject(REDIS_STRING,sdsnew(
-        "-OOM command not allowed when used memory > 'maxmemory'.\r\n"));
+        "-OOM command not allowed when used memory > 'maxmemory'.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.pmmerr = createObject(REDIS_STRING,sdsnew(
+            "-OOM Not enough space in Memory to write. First free some memory.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.execaborterr = createObject(REDIS_STRING,sdsnew(
-        "-EXECABORT Transaction discarded because of previous errors.\r\n"));
+        "-EXECABORT Transaction discarded because of previous errors.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
     shared.noreplicaserr = createObject(REDIS_STRING,sdsnew(
-        "-NOREPLICAS Not enough good slaves to write.\r\n"));
-    shared.space = createObject(REDIS_STRING,sdsnew(" "));
-    shared.colon = createObject(REDIS_STRING,sdsnew(":"));
-    shared.plus = createObject(REDIS_STRING,sdsnew("+"));
+        "-NOREPLICAS Not enough good slaves to write.\r\n",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.space = createObject(REDIS_STRING,sdsnew(" ",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.colon = createObject(REDIS_STRING,sdsnew(":",PM_TRANS_RAM), PM_TRANS_RAM);
+    shared.plus = createObject(REDIS_STRING,sdsnew("+",PM_TRANS_RAM), PM_TRANS_RAM);
 
     for (j = 0; j < REDIS_SHARED_SELECT_CMDS; j++) {
         char dictid_str[64];
@@ -1274,36 +1291,36 @@ void createSharedObjects(void) {
 
         dictid_len = ll2string(dictid_str,sizeof(dictid_str),j);
         shared.select[j] = createObject(REDIS_STRING,
-            sdscatprintf(sdsempty(),
+            sdscatprintf(sdsempty(PM_TRANS_RAM),
                 "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
-                dictid_len, dictid_str));
+                dictid_len, dictid_str), NULL);
     }
-    shared.messagebulk = createStringObject("$7\r\nmessage\r\n",13);
-    shared.pmessagebulk = createStringObject("$8\r\npmessage\r\n",14);
-    shared.subscribebulk = createStringObject("$9\r\nsubscribe\r\n",15);
-    shared.unsubscribebulk = createStringObject("$11\r\nunsubscribe\r\n",18);
-    shared.psubscribebulk = createStringObject("$10\r\npsubscribe\r\n",17);
-    shared.punsubscribebulk = createStringObject("$12\r\npunsubscribe\r\n",19);
-    shared.del = createStringObject("DEL",3);
-    shared.rpop = createStringObject("RPOP",4);
-    shared.lpop = createStringObject("LPOP",4);
-    shared.lpush = createStringObject("LPUSH",5);
+    shared.messagebulk = createStringObject("$7\r\nmessage\r\n",13,PM_TRANS_RAM);
+    shared.pmessagebulk = createStringObject("$8\r\npmessage\r\n",14,PM_TRANS_RAM);
+    shared.subscribebulk = createStringObject("$9\r\nsubscribe\r\n",15,PM_TRANS_RAM);
+    shared.unsubscribebulk = createStringObject("$11\r\nunsubscribe\r\n",18,PM_TRANS_RAM);
+    shared.psubscribebulk = createStringObject("$10\r\npsubscribe\r\n",17,PM_TRANS_RAM);
+    shared.punsubscribebulk = createStringObject("$12\r\npunsubscribe\r\n",19,PM_TRANS_RAM);
+    shared.del = createStringObject("DEL",3,PM_TRANS_RAM);
+    shared.rpop = createStringObject("RPOP",4,PM_TRANS_RAM);
+    shared.lpop = createStringObject("LPOP",4,PM_TRANS_RAM);
+    shared.lpush = createStringObject("LPUSH",5,PM_TRANS_RAM);
     for (j = 0; j < REDIS_SHARED_INTEGERS; j++) {
-        shared.integers[j] = createObject(REDIS_STRING,(void*)(long)j);
+        shared.integers[j] = createObject(REDIS_STRING,(void*)(long)j, PM_TRANS_RAM);
         shared.integers[j]->encoding = REDIS_ENCODING_INT;
     }
     for (j = 0; j < REDIS_SHARED_BULKHDR_LEN; j++) {
         shared.mbulkhdr[j] = createObject(REDIS_STRING,
-            sdscatprintf(sdsempty(),"*%d\r\n",j));
+            sdscatprintf(sdsempty(PM_TRANS_RAM),"*%d\r\n",j), PM_TRANS_RAM);
         shared.bulkhdr[j] = createObject(REDIS_STRING,
-            sdscatprintf(sdsempty(),"$%d\r\n",j));
+            sdscatprintf(sdsempty(PM_TRANS_RAM),"$%d\r\n",j), PM_TRANS_RAM);
     }
     /* The following two shared objects, minstring and maxstrings, are not
      * actually used for their value but as a special object meaning
      * respectively the minimum possible string and the maximum possible
      * string in string comparisons for the ZRANGEBYLEX command. */
-    shared.minstring = createStringObject("minstring",9);
-    shared.maxstring = createStringObject("maxstring",9);
+    shared.minstring = createStringObject("minstring",9,PM_TRANS_RAM);
+    shared.maxstring = createStringObject("maxstring",9,PM_TRANS_RAM);
 }
 
 void initServerConfig(void) {
@@ -1334,8 +1351,21 @@ void initServerConfig(void) {
     server.syslog_ident = zstrdup(REDIS_DEFAULT_SYSLOG_IDENT);
     server.syslog_facility = LOG_LOCAL0;
     server.daemonize = REDIS_DEFAULT_DAEMONIZE;
+    server.pm_file_path = NULL;
+    server.pm_file_size = REDIS_DEFAULT_PM_FILE_SIZE;
+    server.pm_file_synch_mode = REDIS_DEFAULT_PM_FILE_SYNCH_MODE;
+    server.pm_file_fault_injections = 0;
+    server.pm_fast_memcpy = REDIS_DEFAULT_PM_FAST_MEMCPY;
+    server.pm_align_objsize = REDIS_DEFAULT_PM_ALIGN_OBJSIZE;
+    server.pm_memory_counter = NULL;
     server.aof_state = REDIS_AOF_OFF;
     server.aof_fsync = REDIS_DEFAULT_AOF_FSYNC;
+    server.aof_mmap = REDIS_DEFAULT_AOF_MMAP;
+    server.aof_mmap_truncate = REDIS_DEFAULT_AOF_MMAP_TRUNCATE;
+    server.aof_mmap_prealloc = REDIS_DEFAULT_AOF_MMAP_PREALLOC;
+    server.aof_mmap_direct = REDIS_DEFAULT_AOF_MMAP;
+    server.aof_mmap_rewrite = REDIS_DEFAULT_AOF_MMAP;
+    server.aof_mmap_block_size = REDIS_DEFAULT_AOF_MMAP_BLOCK_SIZE;
     server.aof_no_fsync_on_rewrite = REDIS_DEFAULT_AOF_NO_FSYNC_ON_REWRITE;
     server.aof_rewrite_perc = REDIS_AOF_REWRITE_PERC;
     server.aof_rewrite_min_size = REDIS_AOF_REWRITE_MIN_SIZE;
@@ -1347,6 +1377,7 @@ void initServerConfig(void) {
     server.aof_lastbgrewrite_status = REDIS_OK;
     server.aof_delayed_fsync = 0;
     server.aof_fd = -1;
+    server.aof_fd_bak = -1;
     server.aof_selected_db = -1; /* Make sure the first time will not match */
     server.aof_flush_postponed_start = 0;
     server.aof_rewrite_incremental_fsync = REDIS_DEFAULT_AOF_REWRITE_INCREMENTAL_FSYNC;
@@ -1355,6 +1386,10 @@ void initServerConfig(void) {
     server.rdb_filename = zstrdup(REDIS_DEFAULT_RDB_FILENAME);
     server.aof_filename = zstrdup(REDIS_DEFAULT_AOF_FILENAME);
     server.requirepass = NULL;
+    server.rdb_mmap = REDIS_DEFAULT_RDB_MMAP;
+    server.rdb_mmap_truncate = REDIS_DEFAULT_RDB_MMAP_TRUNCATE;
+    server.rdb_mmap_prealloc = REDIS_DEFAULT_RDB_MMAP_PREALLOC;
+    server.rdb_mmap_block_size = REDIS_DEFAULT_RDB_MMAP_BLOCK_SIZE;
     server.rdb_compression = REDIS_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = REDIS_DEFAULT_RDB_CHECKSUM;
     server.stop_writes_on_bgsave_err = REDIS_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR;
@@ -1661,13 +1696,13 @@ void initServer(void) {
     }
 
     server.current_client = NULL;
-    server.clients = listCreate();
-    server.clients_to_close = listCreate();
-    server.slaves = listCreate();
-    server.monitors = listCreate();
+    server.clients = listCreate(PM_TRANS_RAM);
+    server.clients_to_close = listCreate(PM_TRANS_RAM);
+    server.slaves = listCreate(PM_TRANS_RAM);
+    server.monitors = listCreate(PM_TRANS_RAM);
     server.slaveseldb = -1; /* Force to emit the first SELECT command. */
-    server.unblocked_clients = listCreate();
-    server.ready_keys = listCreate();
+    server.unblocked_clients = listCreate(PM_TRANS_RAM);
+    server.ready_keys = listCreate(PM_TRANS_RAM);
 
     createSharedObjects();
     adjustOpenFilesLimit();
@@ -1708,7 +1743,7 @@ void initServer(void) {
         server.db[j].avg_ttl = 0;
     }
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
-    server.pubsub_patterns = listCreate();
+    server.pubsub_patterns = listCreate(PM_TRANS_RAM);
     listSetFreeMethod(server.pubsub_patterns,freePubsubPattern);
     listSetMatchMethod(server.pubsub_patterns,listMatchPubsubPattern);
     server.cronloops = 0;
@@ -1716,7 +1751,11 @@ void initServer(void) {
     server.aof_child_pid = -1;
     server.rdb_child_type = REDIS_RDB_CHILD_TYPE_NONE;
     aofRewriteBufferReset();
-    server.aof_buf = sdsempty();
+    server.aof_buf = sdsempty(PM_TRANS_RAM);
+    server.aof_mapped_ptr = NULL;
+    server.aof_mapped_ptr_bak = NULL;
+    server.aof_mapped_size = 0;
+    server.aof_rewrite_size_at_fork = 0;
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;
@@ -1732,6 +1771,10 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
     updateCachedTime();
+    server.rdb_id = 0; /* By default, next save will be to RDB */
+    server.rdb_mapped_ptr = NULL;
+    server.rdb_mapped_ptr_bak = NULL;
+    server.sds_alignment = server.pm_align_objsize ? 64 : 0;
 
     /* Create the serverCron() time event, that's our main way to process
      * background operations. */
@@ -1763,6 +1806,55 @@ void initServer(void) {
             exit(1);
         }
     }
+
+    /* Open (or create) the RDB files if needed. */
+    if (server.rdb_mmap && server.rdb_mmap_prealloc) {
+        char bakfile[256];
+
+        snprintf(bakfile,256,"%s.bak", server.rdb_filename);
+
+        server.rdb_fd = open(server.rdb_filename, O_RDWR|O_CREAT,0644);
+        if (server.rdb_fd == -1) {
+            redisLog(REDIS_WARNING, "Can't open the RDB file: %s",
+                    strerror(errno));
+            exit(1);
+        }
+
+        server.rdb_fd_bak = open(bakfile, O_RDWR|O_CREAT,0644);
+        if (server.rdb_fd_bak == -1) {
+            redisLog(REDIS_WARNING, "Can't open the backup RDB file: %s",
+                    strerror(errno));
+            exit(1);
+        }
+
+        if (ftruncate(server.rdb_fd, server.rdb_mmap_block_size) < 0) {
+            redisLog(REDIS_WARNING, "Could not truncate RDB file."
+                                    "ftruncate: %s", strerror(errno));
+            exit(1);
+        }
+
+        if (ftruncate(server.rdb_fd_bak, server.rdb_mmap_block_size) < 0) {
+            redisLog(REDIS_WARNING, "Could not truncate backup RDB file."
+                                    "ftruncate: %s", strerror(errno));
+            exit(1);
+        }
+
+        /* READ+WRITE mode to allow loading data from RDB */
+        server.rdb_mapped_ptr = mmap(NULL, server.rdb_mmap_block_size, PROT_READ|PROT_WRITE, MAP_SHARED, server.rdb_fd, 0);
+        if (server.rdb_mapped_ptr == MAP_FAILED) {
+            redisLog(REDIS_WARNING, "Can't mmap the RDB file: %s",
+                    strerror(errno));
+            exit(1);
+        }
+
+        server.rdb_mapped_ptr_bak = mmap(NULL, server.rdb_mmap_block_size, PROT_READ|PROT_WRITE, MAP_SHARED, server.rdb_fd_bak, 0);
+        if (server.rdb_mapped_ptr_bak == MAP_FAILED) {
+            redisLog(REDIS_WARNING, "Can't mmap the backup RDB file: %s",
+                    strerror(errno));
+            exit(1);
+        }
+    }
+
 
     /* 32 bit instances are limited to 4GB of address space, so if there is
      * no explicit limit in the user provided configuration we set a limit
@@ -1811,10 +1903,10 @@ void populateCommandTable(void) {
             f++;
         }
 
-        retval1 = dictAdd(server.commands, sdsnew(c->name), c);
+        retval1 = dictAdd(server.commands, sdsnew(c->name,PM_TRANS_RAM), c, PM_TRANS_RAM);
         /* Populate an additional dictionary that will be unaffected
          * by rename-command statements in redis.conf. */
-        retval2 = dictAdd(server.orig_commands, sdsnew(c->name), c);
+        retval2 = dictAdd(server.orig_commands, sdsnew(c->name,PM_TRANS_RAM), c, PM_TRANS_RAM);
         redisAssert(retval1 == DICT_OK && retval2 == DICT_OK);
     }
 }
@@ -1862,7 +1954,7 @@ void redisOpArrayFree(redisOpArray *oa) {
         oa->numops--;
         op = oa->ops+oa->numops;
         for (j = 0; j < op->argc; j++)
-            decrRefCount(op->argv[j]);
+            decrRefCount(op->argv[j], PM_TRANS_RAM);
         zfree(op->argv);
     }
     zfree(oa->ops);
@@ -1876,10 +1968,10 @@ struct redisCommand *lookupCommand(sds name) {
 
 struct redisCommand *lookupCommandByCString(char *s) {
     struct redisCommand *cmd;
-    sds name = sdsnew(s);
+    sds name = sdsnew(s,PM_TRANS_RAM);
 
     cmd = dictFetchValue(server.commands, name);
-    sdsfree(name);
+    sdsfree(name, PM_TRANS_RAM);
     return cmd;
 }
 
@@ -2086,7 +2178,7 @@ int processCommand(redisClient *c) {
             addReply(c, shared.bgsaveerr);
         else
             addReplySds(c,
-                sdscatprintf(sdsempty(),
+                sdscatprintf(sdsempty(PM_TRANS_RAM),
                 "-MISCONF Errors writing to the AOF file: %s\r\n",
                 strerror(server.aof_last_write_errno)));
         return REDIS_OK;
@@ -2204,23 +2296,24 @@ int prepareForShutdown(int flags) {
         rdbRemoveTempFile(server.rdb_child_pid);
     }
     if (server.aof_state != REDIS_AOF_OFF) {
-        /* Kill the AOF saving child as the AOF we already have may be longer
-         * but contains the full dataset anyway. */
-        if (server.aof_child_pid != -1) {
-            /* If we have AOF enabled but haven't written the AOF yet, don't
-             * shutdown or else the dataset will be lost. */
-            if (server.aof_state == REDIS_AOF_WAIT_REWRITE) {
-                redisLog(REDIS_WARNING, "Writing initial AOF, can't exit.");
-                return REDIS_ERR;
+            /* Kill the AOF saving child as the AOF we already have may be longer
+             * but contains the full dataset anyway. */
+            if (server.aof_child_pid != -1) {
+                /* If we have AOF enabled but haven't written the AOF yet, don't
+                 * shutdown or else the dataset will be lost. */
+                if (server.aof_state == REDIS_AOF_WAIT_REWRITE) {
+                    redisLog(REDIS_WARNING, "Writing initial AOF, can't exit.");
+                    return REDIS_ERR;
+                }
+                redisLog(REDIS_WARNING,
+                    "There is a child rewriting the AOF. Killing it!");
+                kill(server.aof_child_pid,SIGUSR1);
             }
-            redisLog(REDIS_WARNING,
-                "There is a child rewriting the AOF. Killing it!");
-            kill(server.aof_child_pid,SIGUSR1);
+            /* Append only file: fsync() the AOF and exit */
+            redisLog(REDIS_NOTICE,"Calling fsync() on the AOF file.");
+            aof_fsync(server.aof_fd);
         }
-        /* Append only file: fsync() the AOF and exit */
-        redisLog(REDIS_NOTICE,"Calling fsync() on the AOF file.");
-        aof_fsync(server.aof_fd);
-    }
+
     if ((server.saveparamslen > 0 && !nosave) || save) {
         redisLog(REDIS_NOTICE,"Saving the final RDB snapshot before exiting.");
         /* Snapshotting. Perform a SYNC SAVE and exit */
@@ -2232,6 +2325,50 @@ int prepareForShutdown(int flags) {
              * synchronization... */
             redisLog(REDIS_WARNING,"Error trying to save the DB, can't exit.");
             return REDIS_ERR;
+        } else {
+            if (server.rdb_mmap && server.rdb_mmap_prealloc) {
+                server.rdb_id = (server.rdb_id + 1) % 2;
+                if (server.rdb_id == 1) {
+                    redisLog(REDIS_NOTICE,"SHUTDOWN SAVE: Switch to BAK file");
+                } else {
+                    redisLog(REDIS_NOTICE,"SHUTDOWN SAVE: Switch to RDB file");
+                }
+            }
+        }
+
+        if (server.rdb_mmap && server.rdb_mmap_prealloc) {
+            munmap(server.rdb_mapped_ptr, server.rdb_mmap_block_size);
+            server.rdb_mapped_ptr = NULL;
+            close(server.rdb_fd);
+
+            munmap(server.rdb_mapped_ptr_bak, server.rdb_mmap_block_size);
+            server.rdb_mapped_ptr_bak = NULL;
+            close(server.rdb_fd_bak);
+
+            if (server.rdb_id == 0) {
+                redisLog(REDIS_NOTICE,"Last save was to BAK file - swap RDB and BAK files");
+
+                /* Last save was to BAK file - swap RDB files */
+                char bakfile[256];
+                char tmpfile[256];
+
+                snprintf(tmpfile,256,"%s.tmp", server.rdb_filename);
+                snprintf(bakfile,256,"%s.bak", server.rdb_filename);
+
+                /* Swap RDB/BAK files */
+                if (link(server.rdb_filename,tmpfile) == -1) {
+                    redisLog(REDIS_WARNING,"Error linking temp DB file on the final destination: %s", strerror(errno));
+                    return REDIS_ERR;
+                }
+                if (rename(bakfile,server.rdb_filename) == -1) {
+                    redisLog(REDIS_WARNING,"Error moving DB file on the final destination: %s", strerror(errno));
+                    return REDIS_ERR;
+                }
+                if (rename(tmpfile,bakfile) == -1) {
+                    redisLog(REDIS_WARNING,"Error moving temp DB file on the final destination: %s", strerror(errno));
+                    return REDIS_ERR;
+                }
+            }
         }
     }
     if (server.daemonize) {
@@ -2447,7 +2584,7 @@ void bytesToHuman(char *s, unsigned long long n) {
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
 sds genRedisInfoString(char *section) {
-    sds info = sdsempty();
+    sds info = sdsempty(PM_TRANS_RAM);
     time_t uptime = server.unixtime-server.stat_starttime;
     int j, numcommands;
     struct rusage self_ru, c_ru;
@@ -2541,6 +2678,20 @@ sds genRedisInfoString(char *section) {
         char hmem[64];
         char peak_hmem[64];
         size_t zmalloc_used = zmalloc_used_memory();
+        char pmsize_current_hmem[64];
+        char pmsize_max_hmem[64];
+/*        char pmsize_pool_hmem[64];
+        char pmsize_free_hmem[64];
+        char pmsize_free_total_hmem[64];*/
+
+        bytesToHuman(hmem, zmalloc_used_memory());
+        bytesToHuman(peak_hmem, server.stat_peak_memory);
+        bytesToHuman(pmsize_current_hmem, get_current_alloc_size());
+        bytesToHuman(pmsize_max_hmem, get_max_alloc_size());
+/*        bytesToHuman(pmsize_pool_hmem, pm_get_pool_size());
+        bytesToHuman(pmsize_free_hmem, pm_get_free_size());
+        bytesToHuman(pmsize_free_total_hmem, pm_get_free_total_size());*/
+
 
         /* Peak memory is updated from time to time by serverCron() so it
          * may happen that the instantaneous value is slightly bigger than
@@ -2561,31 +2712,81 @@ sds genRedisInfoString(char *section) {
             "used_memory_peak_human:%s\r\n"
             "used_memory_lua:%lld\r\n"
             "mem_fragmentation_ratio:%.2f\r\n"
-            "mem_allocator:%s\r\n",
-            zmalloc_used,
+            "mem_allocator:%s\r\n"
+/*            "pm_allocs_num:%ld\r\n"*/
+            "pm_allocs_current_size:%s\r\n"
+            "pm_allocs_max_size:%s\r\n"
+            "pm_memory_used_max: %zu\t used_memory_peak: %zu\r\n"
+
+/*            "pm_pool_total_size:%s\r\n"
+            "pm_free_num:%ld\r\n"
+            "pm_free_total_size:%s\r\n"
+            "pm_free_size (pool_size-alloc_size):%s\r\n"*/
+            ,
+            zmalloc_used_memory(),
             hmem,
             server.resident_set_size,
             server.stat_peak_memory,
             peak_hmem,
             ((long long)lua_gc(server.lua,LUA_GCCOUNT,0))*1024LL,
             zmalloc_get_fragmentation_ratio(server.resident_set_size),
-            ZMALLOC_LIB
+            ZMALLOC_LIB,
+            pmsize_current_hmem,
+            pmsize_max_hmem,
+            get_max_alloc_size(),server.stat_peak_memory
+/*            pm_get_allocs_num(),
+            pmsize_used_hmem,
+            pmsize_total_hmem,
+            pmsize_pool_hmem,
+            pm_get_free_num(),
+            pmsize_free_total_hmem,
+            pmsize_free_hmem*/
             );
     }
 
-    /* Persistence */
+//    /* Persistence */
+/*    char pmfile_hmem[64];
+     bytesToHuman(pmfile_hmem,server.pm_file_size);
+
+     char pmfile_fault_inj[64];
+     if(PM_FILE_SYNCH_MODE_FIT==server.pm_file_synch_mode)
+     {
+         snprintf(pmfile_fault_inj, sizeof(pmfile_fault_inj)-1, " act: %zu max: %zu", pm_get_fault_counter(), server.pm_file_fault_injections);
+     }
+     else
+     {
+         strcpy(pmfile_fault_inj, "Fault injection only");
+     }*/
+
+
     if (allsections || defsections || !strcasecmp(section,"persistence")) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
             "# Persistence\r\n"
             "loading:%d\r\n"
             "rdb_changes_since_last_save:%lld\r\n"
+            "rdb_mmap:%d\r\n"
+            "rdb_mmap_truncate:%d\r\n"
+            "rdb_mmap_prealloc:%d\r\n"
+            "rdb_mmap_block_size:%zu\r\n"
             "rdb_bgsave_in_progress:%d\r\n"
             "rdb_last_save_time:%jd\r\n"
             "rdb_last_bgsave_status:%s\r\n"
             "rdb_last_bgsave_time_sec:%jd\r\n"
             "rdb_current_bgsave_time_sec:%jd\r\n"
+/*            "pm_file_path:%s\r\n"
+            "pm_file_size:%s\r\n"
+            "pm_file_synch_mode:%s\r\n"
+            "pm_file_fault_injections:%s\r\n"
+            "pm_fast_memcpy:%d\r\n"
+            "pm_align_objsize:%d\r\n"*/
             "aof_enabled:%d\r\n"
+            "aof_mmap:%d\r\n"
+            "aof_mmap_truncate:%d\r\n"
+            "aof_mmap_prealloc:%d\r\n"
+            "aof_mmap_direct:%d\r\n"
+            "aof_mmap_rewrite:%d\r\n"
+            "aof_mmap_block_size:%zu\r\n"
             "aof_rewrite_in_progress:%d\r\n"
             "aof_rewrite_scheduled:%d\r\n"
             "aof_last_rewrite_time_sec:%jd\r\n"
@@ -2594,13 +2795,29 @@ sds genRedisInfoString(char *section) {
             "aof_last_write_status:%s\r\n",
             server.loading,
             server.dirty,
+            server.rdb_mmap != 0,
+            server.rdb_mmap_truncate != 0,
+            server.rdb_mmap_prealloc != 0,
+            server.rdb_mmap_block_size,
             server.rdb_child_pid != -1,
             (intmax_t)server.lastsave,
             (server.lastbgsave_status == REDIS_OK) ? "ok" : "err",
             (intmax_t)server.rdb_save_time_last,
             (intmax_t)((server.rdb_child_pid == -1) ?
                 -1 : time(NULL)-server.rdb_save_time_start),
+/*            (server.pm_file_path == NULL) ? "NONE" : server.pm_file_path,
+            pmfile_hmem,
+            (PM_FILE_SYNCH_MODE_CL==server.pm_file_synch_mode)?"CL":(PM_FILE_SYNCH_MODE_MSYNCH==server.pm_file_synch_mode)?"MSYNCH":"Fault injection",
+            pmfile_fault_inj,
+            server.pm_fast_memcpy != 0,
+            server.pm_align_objsize != 0,*/
             server.aof_state != REDIS_AOF_OFF,
+            server.aof_mmap != 0,
+            server.aof_mmap_truncate != 0,
+            server.aof_mmap_prealloc != 0,
+            server.aof_mmap_direct != 0,
+            server.aof_mmap_rewrite != 0,
+            server.aof_mmap_block_size,
             server.aof_child_pid != -1,
             server.aof_rewrite_scheduled,
             (intmax_t)server.aof_rewrite_time_last,
@@ -2878,7 +3095,7 @@ void infoCommand(redisClient *c) {
         return;
     }
     sds info = genRedisInfoString(section);
-    addReplySds(c,sdscatprintf(sdsempty(),"$%lu\r\n",
+    addReplySds(c,sdscatprintf(sdsempty(PM_TRANS_RAM),"$%lu\r\n",
         (unsigned long)sdslen(info)));
     addReplySds(c,info);
     addReply(c,shared.crlf);
@@ -2889,7 +3106,7 @@ void monitorCommand(redisClient *c) {
     if (c->flags & REDIS_SLAVE) return;
 
     c->flags |= (REDIS_SLAVE|REDIS_MONITOR);
-    listAddNodeTail(server.monitors,c);
+    listAddNodeTail(server.monitors,c,PM_TRANS_RAM);
     addReply(c,shared.ok);
 }
 
@@ -3023,7 +3240,7 @@ int freeMemoryIfNeeded(void) {
             if (bestkey) {
                 long long delta;
 
-                robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
+                robj *keyobj = createStringObject(bestkey,sdslen(bestkey),PM_TRANS_RAM);
                 propagateExpire(db,keyobj);
                 /* We compute the amount of memory freed by dbDelete() alone.
                  * It is possible that actually the memory needed to propagate
@@ -3040,7 +3257,7 @@ int freeMemoryIfNeeded(void) {
                 server.stat_evictedkeys++;
                 notifyKeyspaceEvent(REDIS_NOTIFY_EVICTED, "evicted",
                     keyobj, db->id);
-                decrRefCount(keyobj);
+                decrRefCount(keyobj, PM_TRANS_RAM);
                 keys_freed++;
 
                 /* When the memory to free starts to be big enough, we may
@@ -3243,12 +3460,29 @@ int checkForSentinelMode(int argc, char **argv) {
 void loadDataFromDisk(void) {
     long long start = ustime();
     if (server.aof_state == REDIS_AOF_ON) {
-        if (loadAppendOnlyFile(server.aof_filename) == REDIS_OK)
-            redisLog(REDIS_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+        if (server.aof_mmap) {
+            if (loadMappedAppendOnlyFile() == REDIS_OK) {
+                redisLog(REDIS_NOTICE,"DB loaded from append only file: %.3f seconds",
+                        (float)(ustime()-start)/1000000);
+                redisLog(REDIS_NOTICE,"Append only file size: %zu bytes",
+                        server.loading_total_bytes);
+            }
+        } else {
+            if (loadAppendOnlyFile(server.aof_filename) == REDIS_OK) {
+                redisLog(REDIS_NOTICE,"DB loaded from append only file: %.3f seconds",
+                        (float)(ustime()-start)/1000000);
+                redisLog(REDIS_NOTICE,"Append only file size: %zu bytes",
+                        server.loading_total_bytes);
+            }
+        }
     } else {
         if (rdbLoad(server.rdb_filename) == REDIS_OK) {
             redisLog(REDIS_NOTICE,"DB loaded from disk: %.3f seconds",
-                (float)(ustime()-start)/1000000);
+                    (float)(ustime()-start)/1000000);
+            redisLog(REDIS_NOTICE,"DB snapshot size: %zu bytes",
+                    server.loading_total_bytes);
+            /* Next save to BAK */
+            server.rdb_id = 1;
         } else if (errno != ENOENT) {
             redisLog(REDIS_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
             exit(1);
@@ -3271,6 +3505,113 @@ void redisSetProcTitle(char *title) {
 #else
     REDIS_NOTUSED(title);
 #endif
+}
+
+void loadDataFromPersistentMemory(redisDb *db,int checkPool)
+{
+    long long start = ustime();
+    int i=0;
+    dictEntry *entry;
+    robj *r = NULL;
+    if(server.pm_memory_counter)
+    {
+    	pm_memory_counter = server.pm_memory_counter;
+    	reset_current_alloc_size();
+        reset_max_alloc_size();
+    }
+
+/*1. Check all keys */
+    PMEMoid pm =pmemobj_first(pm_pool,PM_TAG_ALLOC_ENTITY);
+    PMEMoid temp;
+    temp.pool_uuid_lo = pm.pool_uuid_lo;
+    while(!OID_IS_NULL(pm))
+    {
+        entry = (dictEntry *)pmemobj_direct(pm);
+        r = (robj *)(entry->v.val);
+        /*check if key has ptr to value (Check 1a)*/
+        if(r)
+        {
+            /*check if value has "Ref Counter" != 0
+             * If Ref Counter is 0, then increment it because there is correct pair: key-value (Check 1b)*/
+            if(checkPool==RUN_CHECK)
+            {
+                if(r->refcount==0)
+                {
+                    incrRefCount(r,pm_pool);
+                }
+            }
+            /*correct key, add it to dictionary*/
+            dictAddDictEntry(db->dict, entry);
+            /*add key size */
+            if(server.pm_memory_counter)
+            	increase_current_alloc_size(pmemobj_alloc_usable_size(pm));
+            temp.off = (void *) ((uintptr_t)(entry->v.val) - (uintptr_t)pm_pool);
+            /*printf("\n add = %p %p",temp.off,entry->v.val);*/
+            /*add value size */
+            if(server.pm_memory_counter)
+            	increase_current_alloc_size(pmemobj_alloc_usable_size(temp));
+
+
+        }
+        else
+        {
+            if(checkPool==RUN_CHECK)
+            {
+                /*remove key without ptr to it's value*/
+                pm_trans_free(pm_pool, entry);
+            }
+        }
+        pm = pmemobj_next(pm);
+        ++i;
+    }
+     redisLog(REDIS_NOTICE,"DB loaded from Persistent memory file: %.3f seconds",
+                                (float)(ustime()-start)/1000000);
+     redisLog(REDIS_NOTICE,"Persistent memory allocations:  %d keys",i);
+
+    if(checkPool==RUN_CHECK)
+    {
+    /*2. Check all values*/
+         pm =pmemobj_first(pm_pool,PM_TAG_ALLOC_OBJ);
+
+        i=0;
+        while(!OID_IS_NULL(pm))
+        {
+            r = (robj *)pmemobj_direct(pm);
+            /*check Ref Counter of Value, if it is 0, then remove Value as it has no "key" (Check 2a)*/
+            if(r->refcount==0)
+            {
+                pm_trans_free(pm_pool, r);
+            }
+            pm = pmemobj_next(pm);
+            ++i;
+        }
+    }
+    redisLog(REDIS_NOTICE,"Values checked %d",i);
+
+}
+
+void initPersistentMemory()
+{
+
+    if(server.pm_file_path)
+    {
+        long long start = ustime();
+        char pmfile_hmem[64];
+        bytesToHuman(pmfile_hmem,server.pm_file_size);
+        redisLog(REDIS_NOTICE,"Start init Persistent memory file %s size %s", server.pm_file_path, pmfile_hmem);
+
+        if(0 != pm_init(server.pm_file_path, server.pm_file_size))
+        {
+            redisLog(REDIS_WARNING,"Can not init persistent memory file %s size %s",
+                    server.pm_file_path, pmfile_hmem);
+            exit(1);
+        }
+        redisLog(REDIS_NOTICE,"Init Persistent memory file %s size %s time %.3f seconds synch mode: %s, disable dump data",
+                server.pm_file_path, pmfile_hmem,
+                (float)(ustime()-start)/1000000,
+                (0==server.pm_file_synch_mode)?"CL":(1==server.pm_file_synch_mode)?"MSYNCH":"Fault injection");
+        resetServerSaveParams();
+    }
 }
 
 int main(int argc, char **argv) {
@@ -3297,9 +3638,10 @@ int main(int argc, char **argv) {
         initSentinel();
     }
 
+
     if (argc >= 2) {
         int j = 1; /* First option to parse in argv[] */
-        sds options = sdsempty();
+        sds options = sdsempty(PM_TRANS_RAM);
         char *configfile = NULL;
 
         /* Handle special options --help and --version */
@@ -3348,10 +3690,20 @@ int main(int argc, char **argv) {
         if (configfile) server.configfile = getAbsolutePath(configfile);
         resetServerSaveParams();
         loadServerConfig(configfile,options);
-        sdsfree(options);
+        sdsfree(options, PM_TRANS_RAM);
+        if (configfile) server.configfile = getAbsolutePath(configfile);
     } else {
         redisLog(REDIS_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
     }
+
+    initPersistentMemory();
+    if (pm_inited())
+    {
+        /*Enable persistent mode for dbDictType. Change dbDictType properties possible only before create any object for dbDictType*/
+        dbDictType.persistent = 1;
+        dbDictType.keyDestructor = NULL; /* Key is in one allocation with dictEntry for Persisten Memory*/
+    }
+
     if (server.daemonize) daemonize();
     initServer();
     if (server.daemonize) createPidFile();
@@ -3365,7 +3717,12 @@ int main(int argc, char **argv) {
         linuxMemoryWarnings();
     #endif
         checkTcpBacklogSettings();
-        loadDataFromDisk();
+        if (dbDictType.persistent == 1) {
+            /*Load data from persistent memory to default database*/
+            loadDataFromPersistentMemory(&(server.db[0]),RUN_CHECK);
+        } else {
+            loadDataFromDisk();
+        }
         if (server.ipfd_count > 0)
             redisLog(REDIS_NOTICE,"The server is now ready to accept connections on port %d", server.port);
         if (server.sofd > 0)

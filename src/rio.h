@@ -41,6 +41,7 @@ struct _rio {
      * Since this functions do not tolerate short writes or reads the return
      * value is simplified to: zero on error, non zero on complete success. */
     size_t (*read)(struct _rio *, void *buf, size_t len);
+    size_t (*mappedread)(struct _rio *, void **buf, size_t len);
     size_t (*write)(struct _rio *, const void *buf, size_t len);
     off_t (*tell)(struct _rio *);
     int (*flush)(struct _rio *);
@@ -81,6 +82,13 @@ struct _rio {
             off_t pos;
             sds buf;
         } fdset;
+        struct {
+            int fd;
+            char *ptr;
+            off_t pos;
+            size_t size;
+            size_t blockSize;
+        } mappedfile;
     } io;
 };
 
@@ -116,6 +124,17 @@ static inline size_t rioRead(rio *r, void *buf, size_t len) {
     return 1;
 }
 
+/* ignore max_processing_chunk
+ * just update buf pointer
+ */
+static inline size_t rioMappedRead(rio *r, void **buf, size_t len) {
+    if (r->mappedread(r,buf,len) == 0)
+        return 0;
+    if (r->update_cksum) r->update_cksum(r,*buf,len);
+    r->processed_bytes += len;
+    return 1;
+}
+
 static inline off_t rioTell(rio *r) {
     return r->tell(r);
 }
@@ -125,6 +144,7 @@ static inline int rioFlush(rio *r) {
 }
 
 void rioInitWithFile(rio *r, FILE *fp);
+void rioInitWithMappedFile(rio *r, int fd, char *ptr, size_t size, size_t blockSize);
 void rioInitWithBuffer(rio *r, sds s);
 void rioInitWithFdset(rio *r, int *fds, int numfds);
 

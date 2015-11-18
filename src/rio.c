@@ -54,6 +54,7 @@
 #include "crc64.h"
 #include "config.h"
 #include "redis.h"
+#include <sys/mman.h>
 
 /* ------------------------- Buffer I/O implementation ----------------------- */
 
@@ -87,6 +88,7 @@ static int rioBufferFlush(rio *r) {
 
 static const rio rioBufferIO = {
     rioBufferRead,
+    NULL,
     rioBufferWrite,
     rioBufferTell,
     rioBufferFlush,
@@ -138,8 +140,59 @@ static int rioFileFlush(rio *r) {
     return (fflush(r->io.file.fp) == 0) ? 1 : 0;
 }
 
+/* Returns 1 or 0 for success/failure. */
+static size_t rioMappedFileWrite(rio *r, const void *buf, size_t len) {
+    int retval;
+    void *ptr;
+
+    size_t free = r->io.mappedfile.size - r->io.mappedfile.pos;
+
+    off_t newlen;
+
+    if (free < len) {
+        newlen = r->io.mappedfile.size + len;
+        /* round-up to the multiply of block size */
+        newlen = newlen + r->io.mappedfile.blockSize - 1;
+        newlen = (newlen / r->io.mappedfile.blockSize) * r->io.mappedfile.blockSize;
+
+        retval = ftruncate(r->io.mappedfile.fd, newlen);
+        if (retval < 0) {
+            return 0;
+        }
+
+        ptr = mremap(r->io.mappedfile.ptr, r->io.mappedfile.size, newlen, MREMAP_MAYMOVE);
+        if (ptr == MAP_FAILED) {
+            return 0;
+        }
+
+        r->io.mappedfile.ptr  = ptr;
+        r->io.mappedfile.size = newlen;
+    }
+
+    memcpy(r->io.mappedfile.ptr + r->io.mappedfile.pos, buf, len);
+    r->io.mappedfile.pos += len;
+
+    return 1;
+}
+
+/* Returns 1 or 0 for success/failure. */
+static size_t rioMappedFileRead(rio *r, void **buf, size_t len) {
+    if ((r->io.mappedfile.size - r->io.mappedfile.pos) < len)
+        return 0; /* not enough buffer to return len bytes. */
+    *buf = r->io.mappedfile.ptr+r->io.mappedfile.pos;
+    r->io.mappedfile.pos += len;
+    return 1;
+}
+
+/* Returns read/write position in file. */
+static off_t rioMappedFileTell(rio *r) {
+    return r->io.mappedfile.pos;
+}
+
+
 static const rio rioFileIO = {
     rioFileRead,
+    NULL,
     rioFileWrite,
     rioFileTell,
     rioFileFlush,
@@ -149,6 +202,19 @@ static const rio rioFileIO = {
     0,              /* read/write chunk size */
     { { NULL, 0 } } /* union for io-specific vars */
 };
+
+static const rio rioMappedFileIO = {
+    NULL,
+    rioMappedFileRead,
+    rioMappedFileWrite,
+    rioMappedFileTell,
+    NULL,           /* update_checksum */
+    0,              /* current checksum */
+    0,              /* bytes read or written */
+    0,              /* read/write chunk size */
+    { { NULL, 0 } } /* union for io-specific vars */
+};
+
 
 void rioInitWithFile(rio *r, FILE *fp) {
     *r = rioFileIO;
@@ -230,6 +296,16 @@ static size_t rioFdsetWrite(rio *r, const void *buf, size_t len) {
     return 1;
 }
 
+void rioInitWithMappedFile(rio *r, int fd, char *ptr, size_t size, size_t blockSize) {
+    *r = rioMappedFileIO;
+    r->io.mappedfile.fd   = fd;
+    r->io.mappedfile.ptr  = ptr;
+    r->io.mappedfile.pos  = 0;
+    r->io.mappedfile.size = size;
+    r->io.mappedfile.blockSize = blockSize;
+}
+
+
 /* Returns 1 or 0 for success/failure. */
 static size_t rioFdsetRead(rio *r, void *buf, size_t len) {
     REDIS_NOTUSED(r);
@@ -253,6 +329,7 @@ static int rioFdsetFlush(rio *r) {
 
 static const rio rioFdsetIO = {
     rioFdsetRead,
+    NULL,
     rioFdsetWrite,
     rioFdsetTell,
     rioFdsetFlush,
@@ -273,13 +350,13 @@ void rioInitWithFdset(rio *r, int *fds, int numfds) {
     for (j = 0; j < numfds; j++) r->io.fdset.state[j] = 0;
     r->io.fdset.numfds = numfds;
     r->io.fdset.pos = 0;
-    r->io.fdset.buf = sdsempty();
+    r->io.fdset.buf = sdsempty(PM_TRANS_RAM);
 }
 
 void rioFreeFdset(rio *r) {
     zfree(r->io.fdset.fds);
     zfree(r->io.fdset.state);
-    sdsfree(r->io.fdset.buf);
+    sdsfree(r->io.fdset.buf,PM_TRANS_RAM);
 }
 
 /* ---------------------------- Generic functions ---------------------------- */
