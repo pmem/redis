@@ -158,6 +158,20 @@ system reboots.
 You'll be able to stop and start Redis using the script named
 /etc/init.d/redis_<portnumber>, for instance /etc/init.d/redis_6379.
 
+NVML version features and limitations
+---
+
+You can use NVML version of Redis by defining optional parameter ( check 
+redis.conf, section PERSISTENT MEMORY). It stores whole dataset in specified 
+pool file. In this mode only string is supported for key & value fields.
+When this option is activated other persistency options(RDB, AOF)
+are disabled. It is also not possible to use Redis build-in replication due
+to lack of fork() support, but it is possible to use NVML replication.
+For more details about this feature check 
+	
+	http://pmem.io/2015/11/23/replication-intro.html 
+
+
 Code contributions
 ---
 
