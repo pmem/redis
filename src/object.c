@@ -31,6 +31,8 @@
 #include "server.h"
 #include <math.h>
 #include <ctype.h>
+#include "libpmemobj.h"
+#include "libpmem.h"
 
 #ifdef __CYGWIN__
 #define strtold(a,b) ((long double)strtod((a),(b)))
@@ -48,10 +50,38 @@ robj *createObject(int type, void *ptr) {
     return o;
 }
 
+robj *createObjectPM(int type, void *ptr) {
+    PMEMoid newPM;
+    robj *o;// = zmalloc(sizeof(*o));
+    //pmemobj_zalloc(server.pm_pool,&newPM,sizeof(*o),PM_TYPE_OBJECT);
+    newPM = pmemobj_tx_zalloc(sizeof(*o),PM_TYPE_OBJECT);
+    o = pmemobj_direct(newPM);
+    /*
+     * TODO: move it to initialization
+     */
+        if(!server.pool_uuid_lo)
+            server.pool_uuid_lo = newPM.pool_uuid_lo;
+
+    o->type = type;
+    o->encoding = OBJ_ENCODING_RAW;
+    o->ptr = ptr;
+    o->refcount = 1;
+
+    /* Set the LRU to the current lruclock (minutes resolution). */
+    o->lru = LRU_CLOCK();
+    return o;
+}
+
 /* Create a string object with encoding OBJ_ENCODING_RAW, that is a plain
  * string object where o->ptr points to a proper sds string. */
 robj *createRawStringObject(const char *ptr, size_t len) {
     return createObject(OBJ_STRING,sdsnewlen(ptr,len));
+}
+/* Create a string object with encoding OBJ_ENCODING_RAW, that is a plain
+ * string object where o->ptr points to a proper sds string.
+ * Located in PM*/
+robj *createRawStringObjectPM(const char *ptr, size_t len) {
+    return createObjectPM(OBJ_STRING,sdsnewlenPM(ptr,len));
 }
 
 /* Create a string object with encoding OBJ_ENCODING_EMBSTR, that is
@@ -74,6 +104,46 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
         memcpy(sh->buf,ptr,len);
         sh->buf[len] = '\0';
     } else {
+        memset(sh->buf,0,len+1);
+    }
+    return o;
+}
+
+/* Create a string object with encoding OBJ_ENCODING_EMBSTR, that is
+ * an object where the sds string is actually an unmodifiable string
+ * allocated in the same chunk as the object itself.
+ * Allocation takes place in PM*/
+robj *createEmbeddedStringObjectPM(const char *ptr, size_t len) {
+    robj *o;// = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1);
+    PMEMoid newPM;
+    //pmemobj_alloc(server.pm_pool,&newPM,(sizeof(robj)+sizeof(struct sdshdr8)+len+1),PM_TYPE_EMB_SDS,NULL,NULL);
+    newPM = pmemobj_tx_alloc((sizeof(robj)+sizeof(struct sdshdr8)+len+1),PM_TYPE_EMB_SDS);
+
+/*
+ * TODO: move it to initialization
+ */
+    if(!server.pool_uuid_lo)
+        server.pool_uuid_lo = newPM.pool_uuid_lo;
+
+    o = pmemobj_direct(newPM);
+
+    struct sdshdr8 *sh = (void*)(o+1);
+
+    o->type = OBJ_STRING;
+    o->encoding = OBJ_ENCODING_EMBSTR;
+    o->ptr = sh+1;
+    o->refcount = 1;
+    o->lru = LRU_CLOCK();
+
+    sh->len = len;
+    sh->alloc = len;
+    sh->flags = SDS_TYPE_8;
+    if (ptr) {
+        //pmemobj_memcpy_persist(server.pm_pool,sh->buf,ptr,len);
+        memcpy(sh->buf,ptr,len);
+        sh->buf[len] = '\0';
+    } else {
+        //pmemobj_memset_persist(server.pm_pool,sh->buf,0,len+1);
         memset(sh->buf,0,len+1);
     }
     return o;
@@ -181,6 +251,30 @@ robj *dupStringObject(robj *o) {
     }
 }
 
+/* Duplicate a string object. New object is created in PM
+ *
+ * The resulting object always has refcount set to 1. */
+robj *dupStringObjectPM(robj *o) {
+    robj *d;
+
+    serverAssert(o->type == OBJ_STRING);
+
+    switch(o->encoding) {
+    case OBJ_ENCODING_RAW:
+        return createRawStringObjectPM(o->ptr,sdslen(o->ptr));
+    case OBJ_ENCODING_EMBSTR:
+        return createEmbeddedStringObjectPM(o->ptr,sdslen(o->ptr));
+    case OBJ_ENCODING_INT:
+        d = createObjectPM(OBJ_STRING, NULL);
+        d->encoding = OBJ_ENCODING_INT;
+        d->ptr = o->ptr;
+        return d;
+    default:
+        serverPanic("Wrong encoding.");
+        break;
+    }
+}
+
 robj *createQuicklistObject(void) {
     quicklist *l = quicklistCreate();
     robj *o = createObject(OBJ_LIST,l);
@@ -239,6 +333,13 @@ void freeStringObject(robj *o) {
         sdsfree(o->ptr);
     }
 }
+
+void freeStringObjectPM(robj *o) {
+    if (o->encoding == OBJ_ENCODING_RAW) {
+        sdsfreePM(o->ptr);
+    }
+}
+
 
 void freeListObject(robj *o) {
     switch (o->encoding) {
@@ -312,6 +413,36 @@ void decrRefCount(robj *o) {
         zfree(o);
     } else {
         o->refcount--;
+    }
+}
+
+void decrRefCountPM(robj *o) {
+    PMEMoid pm;
+    if (o->refcount == 1) {
+        switch(o->type) {
+        case OBJ_STRING: freeStringObjectPM(o); break;
+        case OBJ_LIST: freeListObject(o); break;
+        case OBJ_SET: freeSetObject(o); break;
+        case OBJ_ZSET: freeZsetObject(o); break;
+        case OBJ_HASH: freeHashObject(o); break;
+        default: serverPanic("Unknown object type"); break;
+        }
+        if(server.persistent)
+        {
+
+
+            pm.off = (void *) ((uintptr_t)o - (uintptr_t)server.pm_pool);
+            pm.pool_uuid_lo = server.pool_uuid_lo;
+            pmemobj_tx_free(pm);
+            //pmemobj_free(&pm);
+
+        }
+        else
+        {
+            zfree(o);
+        }
+    } else {
+    	 o->refcount--;
     }
 }
 

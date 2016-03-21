@@ -124,6 +124,19 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
     if (server.cluster_enabled) slotToKeyAdd(key);
  }
 
+/*
+ * Add the key to the DB using libpmemobj transactions
+ */
+void dbAddPM(redisDb *db, robj *key, robj *val) {
+    sds copy = sdsdupPM(key->ptr);
+    int retval = dictAddPM(db->dict, copy, val);
+
+    serverAssertWithInfo(NULL,key,retval == C_OK);
+    if (val->type == OBJ_LIST) signalListAsReady(db, key);
+    if (server.cluster_enabled) slotToKeyAdd(key);
+ }
+
+
 /* Overwrite an existing key with a new value. Incrementing the reference
  * count of the new value is up to the caller.
  * This function does not modify the expire time of the existing key.
@@ -134,6 +147,19 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
 
     serverAssertWithInfo(NULL,key,de != NULL);
     dictReplace(db->dict, key->ptr, val);
+}
+
+
+/* Overwrite an existing key with a new value. Incrementing the reference
+ * count of the new value is up to the caller.
+ * This function does not modify the expire time of the existing key.
+ *
+ * The program is aborted if the key was not already present. */
+void dbOverwritePM(redisDb *db, robj *key, robj *val) {
+    dictEntry *de = dictFind(db->dict,key->ptr);
+
+    serverAssertWithInfo(NULL,key,de != NULL);
+    dictReplacePM(db->dict, key->ptr, val);
 }
 
 /* High level Set operation. This function can be used in order to set
@@ -149,6 +175,19 @@ void setKey(redisDb *db, robj *key, robj *val) {
         dbOverwrite(db,key,val);
     }
     incrRefCount(val);
+    removeExpire(db,key);
+    signalModifiedKey(db,key);
+}
+
+/* High level Set operation. Used for PM */
+void setKeyPM(redisDb *db, robj *key, robj *val) {
+    if (lookupKeyWrite(db,key) == NULL) {
+        dbAddPM(db,key,val);
+    } else {
+
+        dbOverwritePM(db,key,val);
+    }
+    //incrRefCount(val);
     removeExpire(db,key);
     signalModifiedKey(db,key);
 }

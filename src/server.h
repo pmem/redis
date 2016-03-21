@@ -69,6 +69,17 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "sha1.h"
 #include "endianconv.h"
 #include "crc64.h"
+#include "libpmem.h"
+#include "libpmemobj.h"
+
+/* Type Dictionary Entry */
+#define PM_TYPE_ENTRY 0
+/* Type Redis Object */
+#define PM_TYPE_OBJECT 1
+/* Type SDS Object */
+#define PM_TYPE_SDS 2
+/* Type Embedded SDS Object */
+#define PM_TYPE_EMB_SDS 3
 
 /* Error codes */
 #define C_OK                    0
@@ -137,6 +148,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_LATENCY_MONITOR_THRESHOLD 0
+#define REDIS_DEFAULT_PM_FILE_SIZE (1024l*1024l*1024l) /* 1gb */
 
 #define ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 20 /* Loopkups per loop. */
 #define ACTIVE_EXPIRE_CYCLE_FAST_DURATION 1000 /* Microseconds */
@@ -789,6 +801,12 @@ struct redisServer {
     int supervised_mode;            /* See SUPERVISED_* */
     int daemonize;                  /* True if running as a daemon */
     clientBufferLimitsConfig client_obuf_limits[CLIENT_TYPE_OBUF_COUNT];
+    /* Persistent memory */
+    char* pm_file_path;             /* Path to persistent memory file */
+    size_t pm_file_size;            /* If PM file not exist, then create new once with size, default 1gb */
+    bool persistent;				/* Persistency enabled/disabled */
+    PMEMobjpool *pm_pool;
+    uint64_t pool_uuid_lo;
     /* AOF persistence */
     int aof_state;                  /* AOF_(ON|OFF|WAIT_REWRITE) */
     int aof_fsync;                  /* Kind of fsync() policy */
@@ -1176,19 +1194,24 @@ void execCommandPropagateMulti(client *c);
 
 /* Redis object implementation */
 void decrRefCount(robj *o);
+void decrRefCountPM(robj *o);
 void decrRefCountVoid(void *o);
 void incrRefCount(robj *o);
 robj *resetRefCount(robj *obj);
 void freeStringObject(robj *o);
+void freeStringObjectPM(robj *o);
 void freeListObject(robj *o);
 void freeSetObject(robj *o);
 void freeZsetObject(robj *o);
 void freeHashObject(robj *o);
 robj *createObject(int type, void *ptr);
+robj *createObjectPM(int type, void *ptr);
 robj *createStringObject(const char *ptr, size_t len);
 robj *createRawStringObject(const char *ptr, size_t len);
+robj *createRawStringObjectPM(const char *ptr, size_t len);
 robj *createEmbeddedStringObject(const char *ptr, size_t len);
 robj *dupStringObject(robj *o);
+robj *dupStringObjectPM(robj *o);
 int isObjectRepresentableAsLongLong(robj *o, long long *llongval);
 robj *tryObjectEncoding(robj *o);
 robj *getDecodedObject(robj *o);
@@ -1402,8 +1425,11 @@ robj *lookupKeyWrite(redisDb *db, robj *key);
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);
 void dbAdd(redisDb *db, robj *key, robj *val);
+void dbAddPM(redisDb *db, robj *key, robj *val);
 void dbOverwrite(redisDb *db, robj *key, robj *val);
+void dbOverwritePM(redisDb *db, robj *key, robj *val);
 void setKey(redisDb *db, robj *key, robj *val);
+void setKeyPM(redisDb *db, robj *key, robj *val);
 int dbExists(redisDb *db, robj *key);
 robj *dbRandomKey(redisDb *db);
 int dbDelete(redisDb *db, robj *key);

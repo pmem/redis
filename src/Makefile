@@ -98,6 +98,16 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS+= ../deps/jemalloc/lib/libjemalloc.a -ldl
 endif
 
+ifeq ($(USE_NVML),yes)
+	DEPENDENCY_TARGETS+= nvml
+	FINAL_CFLAGS+= -I../deps/nvml/include -DUSE_NVML
+ifeq ($(NVML_DEBUG),yes)
+	NVML_LIBS= ../deps/nvml/src/debug/libpmemobj.a ../deps/nvml/src/debug/libpmem.a -luuid
+else
+	NVML_LIBS= ../deps/nvml/src/nondebug/libpmemobj.a ../deps/nvml/src/nondebug/libpmem.a -luuid
+endif
+endif
+
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 REDIS_INSTALL=$(QUIET_INSTALL)$(INSTALL)
@@ -172,7 +182,7 @@ endif
 
 # redis-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(REDIS_GEOHASH_OBJ) $(FINAL_LIBS)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(REDIS_GEOHASH_OBJ) $(NVML_LIBS) $(FINAL_LIBS)
 
 # redis-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
