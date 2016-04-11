@@ -66,6 +66,7 @@ static int checkStringLength(client *c, long long size) {
 
 void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire, int unit, robj *ok_reply, robj *abort_reply) {
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
+    robj* newVal = 0;
 
     if (expire) {
         if (getLongLongFromObjectOrReply(c, expire, &milliseconds, NULL) != C_OK)
@@ -83,7 +84,22 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
         addReply(c, abort_reply ? abort_reply : shared.nullbulk);
         return;
     }
-    setKey(c->db,key,val);
+    if(server.persistent)
+    {
+    	/* Copy value from RAM to PM - create RedisObject and sds(value)*/
+    	pmemobj_tx_begin(server.pm_pool, NULL, TX_LOCK_NONE);
+        newVal = dupStringObjectPM(val);
+
+    	/* Set key in PM - create DictEntry and sds(key) linked to RedisObject with value
+    	 * don't increment value "ref counter" as in normal process */
+    	setKeyPM(c->db,key,newVal);
+        pmemobj_tx_commit();
+        pmemobj_tx_end();
+    }
+    else
+    {
+    	setKey(c->db,key,val);
+    }
     server.dirty++;
     if (expire) setExpire(c->db,key,mstime()+milliseconds);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",key,c->db->id);

@@ -67,6 +67,7 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 
 /*================================= Globals ================================= */
 
+#define	LAYOUT_NAME "store_db"
 /* Global vars */
 struct redisServer server; /* server global state */
 
@@ -461,12 +462,32 @@ void dictObjectDestructor(void *privdata, void *val)
     if (val == NULL) return; /* Values of swapped out keys as set to NULL */
     decrRefCount(val);
 }
+void dictObjectDestructorPM(void *privdata, void *val)
+{
+    DICT_NOTUSED(privdata);
+
+    if (val == NULL) return; /* Lazy freeing will set value to NULL. */
+    pmemobj_tx_begin(server.pm_pool, NULL, TX_LOCK_NONE);
+    decrRefCountPM(val);
+    pmemobj_tx_commit();
+    pmemobj_tx_end();
+}
+
 
 void dictSdsDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
 
     sdsfree(val);
+}
+
+void dictSdsDestructorPM(void *privdata, void *val)
+{
+    DICT_NOTUSED(privdata);
+    pmemobj_tx_begin(server.pm_pool, NULL, TX_LOCK_NONE);
+    sdsfreePM(val);
+    pmemobj_tx_commit();
+    pmemobj_tx_end();
 }
 
 int dictObjKeyCompare(void *privdata, const void *key1,
@@ -559,7 +580,15 @@ dictType dbDictType = {
     dictSdsDestructor,          /* key destructor */
     dictObjectDestructor   /* val destructor */
 };
-
+/* Db->dict, keys are sds strings, vals are Redis objects. */
+dictType dbDictTypePM = {
+    dictSdsHash,                /* hash function */
+    NULL,                       /* key dup */
+    NULL,                       /* val dup */
+    dictSdsKeyCompare,          /* key compare */
+    dictSdsDestructorPM,          /* key destructor */
+    dictObjectDestructorPM   /* val destructor */
+};
 /* server.lua_scripts sha (as sds string) -> scripts (as robj) cache. */
 dictType shaScriptObjectDictType = {
     dictSdsCaseHash,            /* hash function */
@@ -1458,6 +1487,8 @@ void initServerConfig(void) {
     server.syslog_ident = zstrdup(CONFIG_DEFAULT_SYSLOG_IDENT);
     server.syslog_facility = LOG_LOCAL0;
     server.daemonize = CONFIG_DEFAULT_DAEMONIZE;
+    server.pm_file_path = NULL;
+    server.pm_file_size = REDIS_DEFAULT_PM_FILE_SIZE;
     server.supervised = 0;
     server.supervised_mode = SUPERVISED_NONE;
     server.aof_state = AOF_OFF;
@@ -1883,7 +1914,10 @@ void initServer(void) {
 
     /* Create the Redis databases, and initialize other internal state. */
     for (j = 0; j < server.dbnum; j++) {
-        server.db[j].dict = dictCreate(&dbDictType,NULL);
+        if(server.persistent)
+            server.db[j].dict = dictCreate(&dbDictTypePM,NULL);
+        else
+        	server.db[j].dict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].ready_keys = dictCreate(&setDictType,NULL);
@@ -3902,6 +3936,52 @@ int redisIsSupervised(int mode) {
     return 0;
 }
 
+int pm_init(const char* filename, size_t size)
+{
+    if (access(filename, F_OK) != 0)
+    {
+        /*Prepare memory file*/
+        server.pm_pool = pmemobj_create(filename, LAYOUT_NAME,size, 0666);
+        if (server.pm_pool == NULL)
+        {
+            return 1;
+        }
+    }
+    else
+    {
+        server.pm_pool = pmemobj_open(filename, LAYOUT_NAME);
+        if (server.pm_pool == NULL)
+        {
+
+            return 2;
+        }
+    }
+    //server.pool_uuid_lo = server.pm_pool->uuid_lo;
+    return 0;
+}
+
+void initPersistentMemory()
+{
+if(server.pm_file_path)
+    {
+        long long start = ustime();
+        char pmfile_hmem[64];
+        bytesToHuman(pmfile_hmem,server.pm_file_size);
+        serverLog(LL_NOTICE,"Start init Persistent memory file %s size %s", server.pm_file_path, pmfile_hmem);
+
+        if(0 != pm_init(server.pm_file_path, server.pm_file_size))
+        {
+        	serverLog(LL_WARNING,"Can not init persistent memory file %s size %s",
+                    server.pm_file_path, pmfile_hmem);
+            exit(1);
+        }
+        serverLog(LL_NOTICE,"Init Persistent memory file %s size %s time %.3f seconds synch mode: %s, disable dump data",
+                server.pm_file_path, pmfile_hmem,
+                (float)(ustime()-start)/1000000);
+        server.persistent = true;
+        resetServerSaveParams();
+    }
+}
 
 int main(int argc, char **argv) {
     struct timeval tv;
@@ -4039,6 +4119,7 @@ int main(int argc, char **argv) {
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
+    initPersistentMemory();
     initServer();
     if (background || server.pidfile) createPidFile();
     redisSetProcTitle(argv[0]);

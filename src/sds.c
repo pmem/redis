@@ -37,6 +37,7 @@
 #include <assert.h>
 #include "sds.h"
 #include "sdsalloc.h"
+#include "server.h"
 
 static inline int sdsHdrSize(char type) {
     switch(type&SDS_TYPE_MASK) {
@@ -134,6 +135,85 @@ sds sdsnewlen(const void *init, size_t initlen) {
     return s;
 }
 
+/* Create a new sds string with the content specified by the 'init' pointer
+ * and 'initlen'.
+ * If NULL is used for 'init' the string is initialized with zero bytes.
+ *
+ * The string is always null-termined (all the sds strings are, always) so
+ * even if you create an sds string with:
+ *
+ * mystring = sdsnewlen("abc",3);
+ *
+ * You can print the string with printf() as there is an implicit \0 at the
+ * end of the string. However the string is binary safe and can contain
+ * \0 characters in the middle, as the length is stored in the sds header. */
+sds sdsnewlenPM(const void *init, size_t initlen) {
+    void *sh;
+    sds s;
+    char type = sdsReqType(initlen);
+    PMEMoid newPM;
+    /* Empty strings are usually created in order to append. Use type 8
+     * since type 5 is not good at this. */
+    if (type == SDS_TYPE_5 && initlen == 0) type = SDS_TYPE_8;
+    int hdrlen = sdsHdrSize(type);
+    unsigned char *fp; /* flags pointer. */
+
+    //sh = s_malloc(hdrlen+initlen+1);
+    //pmemobj_zalloc(server.pm_pool,&newPM,(hdrlen+initlen+1),PM_TYPE_SDS);
+    //pmemobj_tx_begin(server.pm_pool, NULL, TX_LOCK_NONE);
+    newPM = pmemobj_tx_zalloc((hdrlen+initlen+1),PM_TYPE_SDS);
+
+    sh = pmemobj_direct(newPM);
+
+    if (!init)
+        //pmemobj_memset_persist(server.pm_pool,sh, 0, hdrlen+initlen+1);
+        memset(sh, 0, hdrlen+initlen+1);
+    if (sh == NULL) return NULL;
+    s = (char*)sh+hdrlen;
+    fp = ((unsigned char*)s)-1;
+    switch(type) {
+        case SDS_TYPE_5: {
+            *fp = type | (initlen << SDS_TYPE_BITS);
+            break;
+        }
+        case SDS_TYPE_8: {
+            SDS_HDR_VAR(8,s);
+            sh->len = initlen;
+            sh->alloc = initlen;
+            *fp = type;
+            break;
+        }
+        case SDS_TYPE_16: {
+            SDS_HDR_VAR(16,s);
+            sh->len = initlen;
+            sh->alloc = initlen;
+            *fp = type;
+            break;
+        }
+        case SDS_TYPE_32: {
+            SDS_HDR_VAR(32,s);
+            sh->len = initlen;
+            sh->alloc = initlen;
+            *fp = type;
+            break;
+        }
+        case SDS_TYPE_64: {
+            SDS_HDR_VAR(64,s);
+            sh->len = initlen;
+            sh->alloc = initlen;
+            *fp = type;
+            break;
+        }
+    }
+    if (initlen && init)
+        //pmemobj_memcpy_persist(server.pm_pool,s, init, initlen);
+        memcpy(s, init, initlen);
+    s[initlen] = '\0';
+  /*  pmemobj_tx_commit();
+    pmemobj_tx_end();*/
+    return s;
+}
+
 /* Create an empty (zero length) sds string. Even in this case the string
  * always has an implicit null term. */
 sds sdsempty(void) {
@@ -151,10 +231,34 @@ sds sdsdup(const sds s) {
     return sdsnewlen(s, sdslen(s));
 }
 
+/* Duplicate an sds string. */
+sds sdsdupPM(const sds s) {
+    return sdsnewlenPM(s, sdslen(s));
+}
+
 /* Free an sds string. No operation is performed if 's' is NULL. */
 void sdsfree(sds s) {
     if (s == NULL) return;
     s_free((char*)s-sdsHdrSize(s[-1]));
+}
+
+
+/* Free an sds string. No operation is performed if 's' is NULL. */
+void sdsfreePM(sds s) {
+    PMEMoid pm;
+    if (s == NULL) return;
+    if(server.persistent)
+    {
+        pm.off = (void *) ((uintptr_t)((char*)s-sdsHdrSize(s[-1])) - (uintptr_t)server.pm_pool);
+        pm.pool_uuid_lo = server.pool_uuid_lo;
+        pmemobj_tx_free(pm);
+        //pmemobj_free(&pm);
+
+    }
+    else
+    {
+        s_free((char*)s-sdsHdrSize(s[-1]));
+    }
 }
 
 /* Set the sds string length to the length as obtained with strlen(), so

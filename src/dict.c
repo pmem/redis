@@ -46,6 +46,9 @@
 #include "dict.h"
 #include "zmalloc.h"
 #include "redisassert.h"
+#include "libpmemobj.h"
+#include "libpmem.h"
+#include "server.h"
 
 /* Using dictEnableResize() / dictDisableResize() we make possible to
  * enable/disable resizing of the hash table as needed. This is very important
@@ -328,6 +331,15 @@ int dictAdd(dict *d, void *key, void *val)
     return DICT_OK;
 }
 
+/* Add an element to the target hash table */
+int dictAddPM(dict *d, void *key, void *val)
+{
+    dictEntry *entry = dictAddRawPM(d,key);
+
+    if (!entry) return DICT_ERR;
+    dictSetVal(d, entry, val);
+    return DICT_OK;
+}
 /* Low level add. This function adds the entry but instead of setting
  * a value returns the dictEntry structure to the user, that will make
  * sure to fill the value field as he wishes.
@@ -371,6 +383,55 @@ dictEntry *dictAddRaw(dict *d, void *key)
     return entry;
 }
 
+
+/* Low level add. This function adds the entry but instead of setting
+ * a value returns the dictEntry structure to the user, that will make
+ * sure to fill the value field as he wishes.
+ *
+ * This function is also directly exposed to the user API to be called
+ * mainly in order to store non-pointers inside the hash value, example:
+ *
+ * entry = dictAddRaw(dict,mykey);
+ * if (entry != NULL) dictSetSignedIntegerVal(entry,1000);
+ *
+ * Return values:
+ *
+ * If key already exists NULL is returned.
+ * If key was added, the hash entry is returned to be manipulated by the caller.
+ */
+dictEntry *dictAddRawPM(dict *d, void *key)
+{
+    int index;
+    dictEntry *entry;
+    dictht *ht;
+    PMEMoid newPM;
+
+    if (dictIsRehashing(d)) _dictRehashStep(d);
+
+    /* Get the index of the new element, or -1 if
+     * the element already exists. */
+    if ((index = _dictKeyIndex(d, key)) == -1)
+        return NULL;
+
+    /* Allocate the memory and store the new entry.
+     * Insert the element in top, with the assumption that in a database
+     * system it is more likely that recently added entries are accessed
+     * more frequently. */
+    ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
+    //entry = zmalloc(sizeof(*entry));
+    //pmemobj_zalloc(server.pm_pool,&newPM,sizeof(*entry),PM_TYPE_ENTRY);
+    newPM = pmemobj_tx_zalloc(sizeof(*entry),PM_TYPE_ENTRY);
+
+    entry = pmemobj_direct(newPM);
+
+    entry->next = ht->table[index];
+    ht->table[index] = entry;
+    ht->used++;
+
+    /* Set the hash entry fields. */
+    dictSetKey(d, entry, key);
+    return entry;
+}
 /* Add an element, discarding the old if the key already exists.
  * Return 1 if the key was added from scratch, 0 if there was already an
  * element with such key and dictReplace() just performed a value update
@@ -382,6 +443,31 @@ int dictReplace(dict *d, void *key, void *val)
     /* Try to add the element. If the key
      * does not exists dictAdd will suceed. */
     if (dictAdd(d, key, val) == DICT_OK)
+        return 1;
+    /* It already exists, get the entry */
+    entry = dictFind(d, key);
+    /* Set the new value and free the old one. Note that it is important
+     * to do that in this order, as the value may just be exactly the same
+     * as the previous one. In this context, think to reference counting,
+     * you want to increment (set), and then decrement (free), and not the
+     * reverse. */
+    auxentry = *entry;
+    dictSetVal(d, entry, val);
+    dictFreeVal(d, &auxentry);
+    return 0;
+}
+
+/* Add an element, discarding the old if the key already exists.
+ * Return 1 if the key was added from scratch, 0 if there was already an
+ * element with such key and dictReplace() just performed a value update
+ * operation. */
+int dictReplacePM(dict *d, void *key, void *val)
+{
+    dictEntry *entry, auxentry;
+
+    /* Try to add the element. If the key
+     * does not exists dictAdd will suceed. */
+    if (dictAddPM(d, key, val) == DICT_OK)
         return 1;
     /* It already exists, get the entry */
     entry = dictFind(d, key);
@@ -414,6 +500,7 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
     unsigned int h, idx;
     dictEntry *he, *prevHe;
     int table;
+    PMEMoid pm;
 
     if (d->ht[0].size == 0) return DICT_ERR; /* d->ht[0].table is NULL */
     if (dictIsRehashing(d)) _dictRehashStep(d);
@@ -434,7 +521,15 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
                     dictFreeKey(d, he);
                     dictFreeVal(d, he);
                 }
-                zfree(he);
+                if(server.persistent)
+                {
+                    pm.off = (void *) ((uintptr_t)he - (uintptr_t)server.pm_pool);
+					pm.pool_uuid_lo = server.pool_uuid_lo;
+                    pmemobj_free(&pm);
+                }
+                else{
+                	zfree(he);
+                }
                 d->ht[table].used--;
                 return DICT_OK;
             }
@@ -457,6 +552,7 @@ int dictDeleteNoFree(dict *ht, const void *key) {
 /* Destroy an entire dictionary */
 int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
     unsigned long i;
+    PMEMoid pm;
 
     /* Free all the elements */
     for (i = 0; i < ht->size && ht->used > 0; i++) {
@@ -469,7 +565,15 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
             nextHe = he->next;
             dictFreeKey(d, he);
             dictFreeVal(d, he);
-            zfree(he);
+            if(server.persistent)
+			{
+				pm.off = (void *) ((uintptr_t)he - (uintptr_t)server.pm_pool);
+				pm.pool_uuid_lo = server.pool_uuid_lo;
+				pmemobj_free(&pm);
+			}
+			else{
+				zfree(he);
+			}
             ht->used--;
             he = nextHe;
         }
