@@ -151,7 +151,7 @@ robj *createStringObjectFromLongLongA(long long value, alloc a) {
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
 robj *createStringObjectFromLongDoubleA(long double value, int humanfriendly, alloc a) {
-    char buf[256];
+    char buf[MAX_LONG_DOUBLE_CHARS];
     int len = ld2string(buf,sizeof(buf),value,humanfriendly);
     return createStringObjectA(buf,len,a);
 }
