@@ -384,13 +384,22 @@ void loadServerConfigFromString(char *config) {
             if (server.hz < CONFIG_MIN_HZ) server.hz = CONFIG_MIN_HZ;
             if (server.hz > CONFIG_MAX_HZ) server.hz = CONFIG_MAX_HZ;
 #ifdef USE_NVML
-        } else if (!strcasecmp(argv[0],"pmfile") && argc != 2) {
+        } else if (!strcasecmp(argv[0],"pmfile") && (argc == 2 || argc == 3)) {
             server.pm_file_path = zstrdup(argv[1]);
-            long long size = memtoll(argv[2],NULL);
-            if (size < CONFIG_MIN_PM_FILE_SIZE) {
-                err = "Invalid pmfile size"; goto loaderr;
+            if (argc == 3) {
+				long long size = memtoll(argv[2],NULL);
+				if (size < CONFIG_MIN_PM_FILE_SIZE) {
+					err = "Invalid pmfile size"; goto loaderr;
+				}
+				server.pm_file_is_poolset = false;
+				server.pm_file_size = size;
+            } else {
+            	if (access(server.pm_file_path, F_OK) != 0) {
+            		err = "Poolset file must exist prior to server start"; goto loaderr;
+            	}
+            	server.pm_file_is_poolset = true;
+            	server.pm_file_size = 0;
             }
-            server.pm_file_size = size;
 #endif
         } else if (!strcasecmp(argv[0],"appendonly") && argc == 2) {
             int yes;

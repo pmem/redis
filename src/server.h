@@ -815,6 +815,7 @@ struct redisServer {
     /* Persistent memory */
     char* pm_file_path;             /* Path to persistent memory file */
     size_t pm_file_size;            /* If PM file does not exist, create new one with given size */
+    bool pm_file_is_poolset;		/* Is pm_file_path pointing poolset file */
     bool persistent;                /* Persistence enabled/disabled */
     PMEMobjpool *pm_pool;           /* PMEM pool handle */
     uint64_t pool_uuid_lo;          /* PMEM pool UUID */

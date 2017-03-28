@@ -1499,6 +1499,7 @@ void initServerConfig(void) {
 #ifdef USE_NVML
     server.pm_file_path = NULL;
     server.pm_file_size = CONFIG_DEFAULT_PM_FILE_SIZE;
+    server.pm_file_is_poolset = 0;
 #endif
     server.supervised = 0;
     server.supervised_mode = SUPERVISED_NONE;
@@ -3954,34 +3955,56 @@ void initPersistentMemory(void) {
     PMEMoid oid;
 
     long long start = ustime();
-    char pmfile_hmem[64];
-    bytesToHuman(pmfile_hmem, server.pm_file_size);
-    serverLog(LL_NOTICE,"Start init Persistent memory file %s size %s",
-            server.pm_file_path, pmfile_hmem);
 
-    if (access(server.pm_file_path, F_OK) != 0) {
-        /* Create new PMEM pool file. */
-        server.pm_pool = pmemobj_create(server.pm_file_path, PM_LAYOUT_NAME,
-                server.pm_file_size, 0666);
+    if (!server.pm_file_is_poolset) {
+    	/* Regular pool file */
+    	char pmfile_hmem[64];
+        bytesToHuman(pmfile_hmem, server.pm_file_size);
+        serverLog(LL_NOTICE,"Start init Persistent memory file %s size %s",
+                server.pm_file_path, pmfile_hmem);
+
+		if (access(server.pm_file_path, F_OK) != 0) {
+			/* Create new PMEM pool file. */
+			server.pm_pool = pmemobj_create(server.pm_file_path, PM_LAYOUT_NAME,
+					server.pm_file_size, 0666);
+		} else {
+			/* Open the existing PMEM pool file. */
+			server.pm_pool = pmemobj_open(server.pm_file_path, PM_LAYOUT_NAME);
+		}
+
+		if (server.pm_pool == NULL) {
+			serverLog(LL_WARNING,"Cannot int persistent memory file %s size %s",
+						server.pm_file_path, pmfile_hmem);
+			exit(1);
+		}
     } else {
-        /* Open the existing PMEM pool file. */
-        server.pm_pool = pmemobj_open(server.pm_file_path, PM_LAYOUT_NAME);
-    }
+    	/* Poolset file */
+        serverLog(LL_NOTICE,"Start init Persistent memory poolset file %s",
+                server.pm_file_path);
 
-    if (server.pm_pool == NULL) {
-        serverLog(LL_WARNING,"Cannot int persistent memory file %s size %s",
-                    server.pm_file_path, pmfile_hmem);
-        exit(1);
+		/* Create poolset parts if necessary. */
+		server.pm_pool = pmemobj_create(server.pm_file_path, PM_LAYOUT_NAME, 0, 0666);
+
+		if (server.pm_pool == NULL) {
+			/* Open the existing PMEM poolset file. */
+			server.pm_pool = pmemobj_open(server.pm_file_path, PM_LAYOUT_NAME);
+
+			if (server.pm_pool == NULL) {
+				serverLog(LL_WARNING,"Cannot int persistent memory poolset file %s",
+							server.pm_file_path);
+				exit(1);
+			}
+		}
     }
 
     /* Get pool UUID from root object's OID. */
     oid = pmemobj_root(server.pm_pool, 1);
     server.pool_uuid_lo = oid.pool_uuid_lo;
 
-    serverLog(LL_NOTICE,"Init Persistent memory file %s size %s time %.3f "
+    serverLog(LL_NOTICE,"Init Persistent memory file %s time %.3f "
             "seconds",
-            server.pm_file_path, pmfile_hmem,
-            (float)(ustime()-start)/1000000);
+            server.pm_file_path,
+			(float)(ustime()-start)/1000000);
     server.persistent = true;
 
     resetServerSaveParams();
