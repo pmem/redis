@@ -116,6 +116,7 @@ ifeq ($(PMDK_DEBUG),yes)
 else
 	FINAL_LIBS+= ../deps/pmdk/src/nondebug/libpmemobj.a ../deps/pmdk/src/nondebug/libpmem.a
 endif
+	FINAL_LIBS+= -ldl
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
@@ -146,6 +147,10 @@ REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o zmalloc.o redis-bench
 REDIS_CHECK_RDB_NAME=redis-check-rdb
 REDIS_CHECK_AOF_NAME=redis-check-aof
 REDIS_CHECK_AOF_OBJ=redis-check-aof.o
+
+ifeq ($(USE_NVML),yes)
+	REDIS_SERVER_OBJ+= pmem.o
+endif
 
 all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME)
 	@echo ""

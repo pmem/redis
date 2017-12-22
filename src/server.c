@@ -471,12 +471,14 @@ void dictObjectDestructorPM(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
 
-    if (val == NULL) return; /* Lazy freeing will set value to NULL. */
-    /* TODO: TX_BEGIN() */
-    pmemobj_tx_begin(server.pm_pool, NULL, TX_LOCK_NONE);
-    decrRefCountPM(val);
-    pmemobj_tx_commit();
-    pmemobj_tx_end();
+    if (val == NULL)
+        return; /* Lazy freeing will set value to NULL. */
+
+    TX_BEGIN(server.pm_pool) {
+        decrRefCountPM(val);
+    } TX_ONABORT {
+        serverLog(LL_WARNING,"ERROR: decrementing the PM ref count failed (%s)", __func__);
+    } TX_END
 }
 #endif
 
@@ -490,12 +492,17 @@ void dictSdsDestructor(void *privdata, void *val)
 #ifdef USE_NVML
 void dictSdsDestructorPM(void *privdata, void *val)
 {
+    PMEMoid *kv_PM_oid;
+
     DICT_NOTUSED(privdata);
-    /* TODO: TX_BEGIN() */
-    pmemobj_tx_begin(server.pm_pool, NULL, TX_LOCK_NONE);
-    sdsfreePM(val);
-    pmemobj_tx_commit();
-    pmemobj_tx_end();
+
+    TX_BEGIN(server.pm_pool) {
+        kv_PM_oid = sdsPMEMoidBackReference(val);
+        sdsfreePM(val);
+        pmemRemoveFromPmemList(*kv_PM_oid);
+    } TX_ONABORT {
+        serverLog(LL_WARNING,"ERROR: removing an element from PM failed (%s)", __func__);
+    } TX_END
 }
 #endif
 
@@ -1519,6 +1526,7 @@ void initServerConfig(void) {
 #ifdef USE_NVML
     server.pm_file_path = NULL;
     server.pm_file_size = CONFIG_DEFAULT_PM_FILE_SIZE;
+    server.pm_reconstruct_required = false;
 #endif
     server.supervised = 0;
     server.supervised_mode = SUPERVISED_NONE;
@@ -1959,9 +1967,12 @@ void initServer(void) {
     /* Create the Redis databases, and initialize other internal state. */
     for (j = 0; j < server.dbnum; j++) {
 #ifdef USE_NVML
-        if (server.persistent)
+        if (server.persistent) {
             server.db[j].dict = dictCreate(&dbDictTypePM,NULL);
-        else
+            
+            pm_type_root_type_id = TOID_TYPE_NUM(struct redis_pmem_root);
+            pm_type_key_val_pair_PM = TOID_TYPE_NUM(struct key_val_pair_PM);
+        } else
 #endif
             server.db[j].dict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
@@ -3989,6 +4000,8 @@ int redisIsSupervised(int mode) {
 #ifdef USE_NVML
 void initPersistentMemory(void) {
     PMEMoid oid;
+    struct redis_pmem_root *root;
+    
 
     long long start = ustime();
     char pmfile_hmem[64];
@@ -3996,29 +4009,34 @@ void initPersistentMemory(void) {
     serverLog(LL_NOTICE,"Start init Persistent memory file %s size %s",
             server.pm_file_path, pmfile_hmem);
 
-    if (access(server.pm_file_path, F_OK) != 0) {
-        /* Create new PMEM pool file. */
-        server.pm_pool = pmemobj_create(server.pm_file_path, PM_LAYOUT_NAME,
-                server.pm_file_size, 0666);
-    } else {
-        /* Open the existing PMEM pool file. */
-        server.pm_pool = pmemobj_open(server.pm_file_path, PM_LAYOUT_NAME);
-    }
+    /* Create new PMEM pool file. */
+    server.pm_pool = pmemobj_create(server.pm_file_path, PM_LAYOUT_NAME, server.pm_file_size, 0666);
 
     if (server.pm_pool == NULL) {
-        serverLog(LL_WARNING,"Cannot int persistent memory file %s size %s",
-                    server.pm_file_path, pmfile_hmem);
-        exit(1);
+        /* Open the existing PMEM pool file. */
+        server.pm_pool = pmemobj_open(server.pm_file_path, PM_LAYOUT_NAME);
+        server.pm_rootoid = POBJ_ROOT(server.pm_pool, struct redis_pmem_root);
+	server.pm_reconstruct_required = true;
+
+        if (server.pm_pool == NULL) {
+            serverLog(LL_WARNING,"Cannot init persistent memory poolset file "
+                "%s size %s", server.pm_file_path, pmfile_hmem);
+            exit(1);
+        }
+    } else {
+        server.pm_rootoid = POBJ_ROOT(server.pm_pool, struct redis_pmem_root);
+        root = pmemobj_direct(server.pm_rootoid.oid);
+        root->num_dict_entries = 0;
     }
 
     /* Get pool UUID from root object's OID. */
     oid = pmemobj_root(server.pm_pool, 1);
     server.pool_uuid_lo = oid.pool_uuid_lo;
 
-    serverLog(LL_NOTICE,"Init Persistent memory file %s size %s time %.3f "
+    serverLog(LL_NOTICE,"Init Persistent memory file %s time %.3f "
             "seconds",
-            server.pm_file_path, pmfile_hmem,
-            (float)(ustime()-start)/1000000);
+            server.pm_file_path,
+			(float)(ustime()-start)/1000000);
     server.persistent = true;
 
     resetServerSaveParams();
@@ -4180,6 +4198,17 @@ int main(int argc, char **argv) {
         linuxMemoryWarnings();
     #endif
         loadDataFromDisk();
+#ifdef USE_NVML
+        if (server.pm_reconstruct_required) {
+            long long start = ustime();
+            if (pmemReconstruct() == C_OK) {
+                serverLog(LL_NOTICE,"DB loaded from PMEM: %.3f seconds",(float)(ustime()-start)/1000000);
+            } else if (errno != ENOENT) {
+                serverLog(LL_WARNING,"Fatal error loading the DB from PMEM: %s. Exiting.",strerror(errno));
+                exit(1);
+            }
+	}
+#endif
         if (server.cluster_enabled) {
             if (verifyClusterConfigWithData() == C_ERR) {
                 serverLog(LL_WARNING,
