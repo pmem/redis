@@ -108,13 +108,13 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS+= ../deps/jemalloc/lib/libjemalloc.a
 endif
 
-ifeq ($(USE_NVML),yes)
-	DEPENDENCY_TARGETS+= nvml
-	FINAL_CFLAGS+= -I../deps/nvml/src/include -I../deps/nvml/src/libpmemobj -I../deps/nvml/src/common -DUSE_NVML
-ifeq ($(NVML_DEBUG),yes)
-	FINAL_LIBS+= ../deps/nvml/src/debug/libpmemobj.so ../deps/nvml/src/debug/libpmem.so
+ifeq ($(USE_PMDK),yes)
+	DEPENDENCY_TARGETS+= pmdk
+	FINAL_CFLAGS+= -I../deps/pmdk/src/include -DUSE_PMDK
+ifeq ($(PMDK_DEBUG),yes)
+	FINAL_LIBS+= ../deps/pmdk/src/debug/libpmemobj.a ../deps/pmdk/src/debug/libpmem.a
 else
-	FINAL_LIBS+= ../deps/nvml/src/nondebug/libpmemobj.so ../deps/nvml/src/nondebug/libpmem.so
+	FINAL_LIBS+= ../deps/pmdk/src/nondebug/libpmemobj.a ../deps/pmdk/src/nondebug/libpmem.a
 endif
 	FINAL_LIBS+= -ldl
 endif
