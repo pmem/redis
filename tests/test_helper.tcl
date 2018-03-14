@@ -72,11 +72,11 @@ set ::quiet 0
 set ::denytags {}
 set ::allowtags {}
 set ::external 0; # If "1" this means, we are running against external instance
-set ::file ""; # If set, runs only the tests in this comma separated list
+set ::files {}; # If set, runs all but the tests in this comma separated list
 set ::curfile ""; # Hold the filename of the current suite
 set ::accurate 0; # If true runs fuzz tests with more iterations
 set ::force_failure 0
-set ::timeout 600; # 10 minutes without progresses will quit the test.
+set ::timeout 60; # 10 minutes without progresses will quit the test.
 set ::last_progress [clock seconds]
 set ::active_servers {} ; # Pids of active Redis instances.
 
@@ -331,7 +331,10 @@ proc signal_idle_client fd {
     if 0 {show_clients_state}
 
     # New unit to process?
-    if {$::next_test != [llength $::all_tests]} {
+    if {
+	$::next_test != [llength $::all_tests]
+	&& [lsearch $::files [lindex $::all_tests $::next_test]] == -1
+    } then {
         if {!$::quiet} {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
             set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
@@ -340,11 +343,15 @@ proc signal_idle_client fd {
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
         incr ::next_test
-    } else {
+    } elseif {$::next_test == [llength $::all_tests] - [llength $::files]} {
+        puts "Length: [llength $::all_tests], next_test: $::next_test"
         lappend ::idle_clients $fd
         if {[llength $::active_clients] == 0} {
             the_end
         }
+    } elseif {[lsearch $::files [lindex $::all_tests $::next_test]] != -1} {
+        puts [colorstr bold-white "Test [lindex $::all_tests $::next_test] is skipped"]
+        incr ::next_test
     }
 }
 
@@ -396,6 +403,20 @@ proc send_data_packet {fd status data} {
     flush $fd
 }
 
+proc get_ommited_tests {conf_file} {
+    set fd [open $conf_file r]
+    set data [read $fd]
+    close $fd
+    set data [split $data "\n"]
+    set ommited_tests "ommited-tests"
+
+    foreach line $data {
+	if {[string first $ommited_tests $line] != -1} {
+	    set ::files [string trim $line $ommited_tests]
+	}
+    }
+}
+
 proc print_help_screen {} {
     puts [join {
         "--valgrind         Run the test over valgrind."
@@ -407,6 +428,7 @@ proc print_help_screen {} {
         "--clients <num>    Number of test clients (default 16)."
         "--timeout <sec>    Test timeout in seconds (default 10 min)."
         "--force-failure    Force the execution of a test that always fails."
+        "--conf <config path> Run without tests specified in config."
         "--help             Print this help screen."
     } "\n"]
 }
@@ -460,6 +482,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         incr j
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg
+        incr j
+    } elseif {$opt eq {--conf}} {
+        get_ommited_tests $arg
         incr j
     } elseif {$opt eq {--help}} {
         print_help_screen
