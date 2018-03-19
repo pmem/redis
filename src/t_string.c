@@ -83,6 +83,12 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
         addReply(c, abort_reply ? abort_reply : shared.nullbulk);
         return;
     }
+    if(val->encoding == OBJ_ENCODING_RAW) {
+        sds copy = sdsdupM(val->ptr);
+        val->a->free(val->ptr);
+        val->a = m_alloc;
+        val->ptr = copy;
+    }
     setKey(c->db,key,val);
     server.dirty++;
     if (expire) setExpire(c,c->db,key,mstime()+milliseconds);

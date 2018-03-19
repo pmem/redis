@@ -96,6 +96,7 @@ static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
 void *zmalloc(size_t size) {
     void *ptr = malloc(size+PREFIX_SIZE);
+    printf("%p\n",ptr );
 
     if (!ptr) zmalloc_oom_handler(size);
 #ifdef HAVE_MALLOC_SIZE
