@@ -31,9 +31,23 @@ It may compile on Solaris derived systems (for instance SmartOS) but our
 support for this platform is *best effort* and Redis is not guaranteed to
 work as well as in Linux, OSX, and \*BSD there.
 
-It is as simple as:
+In order to build Redis, you need to build deps/memkind first:
+
+    % cd deps/memkind/jemalloc
+    % autoconf
+    % mkdir obj; cd obj
+    % ../configure --with-jemalloc-prefix=je_ --with-version=4.5.0-0-g0
+    % make
+    % cd ../..
+    % export JE_PREFIX=je_
+    % ./autogen.sh; ./configure; make; make install
+
+After performing above steps Redis should be able to use jemalloc provided with memkind library.
+Last thing is to run:
 
     % make
+
+in Redis root directory.
 
 You can run a 32 bit Redis binary using:
 
@@ -56,7 +70,7 @@ command in order to really clean everything and rebuild from scratch:
 
     make distclean
 
-This will clean: jemalloc, lua, hiredis, linenoise.
+This will clean: memkind, lua, hiredis, linenoise.
 
 Also if you force certain build options like 32bit target, no C compiler
 optimizations (for debugging purposes), and other similar build time options,
