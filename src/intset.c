@@ -94,19 +94,22 @@ static void _intsetSet(intset *is, int pos, int64_t value) {
 }
 
 /* Create an empty intset. */
-intset *intsetNew(void) {
-    intset *is = zmalloc(sizeof(intset));
+intset *intsetNewA(alloc a) {
+    intset *is = a->alloc(sizeof(intset));
     is->encoding = intrev32ifbe(INTSET_ENC_INT16);
     is->length = 0;
     return is;
 }
 
 /* Resize the intset */
-static intset *intsetResize(intset *is, uint32_t len) {
+static intset *intsetResizeA(intset *is, uint32_t len, alloc a) {
     uint32_t size = len*intrev32ifbe(is->encoding);
-    is = zrealloc(is,sizeof(intset)+size);
+    is = a->realloc(is,sizeof(intset)+size);
     return is;
 }
+
+static inline intset *intsetResize(intset *is, uint32_t len) { return intsetResizeA(is, len, z_alloc ); }
+static inline intset *intsetResizeM(intset *is, uint32_t len) { return intsetResizeA(is, len, m_alloc ); }
 
 /* Search for the position of "value". Return 1 when the value was found and
  * sets "pos" to the position of the value within the intset. Return 0 when

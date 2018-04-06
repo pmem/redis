@@ -203,8 +203,8 @@ robj *createSetObject(void) {
     return o;
 }
 
-robj *createIntsetObject(void) {
-    intset *is = intsetNew();
+robj *createIntsetObjectA(alloc a) {
+    intset *is = intsetNewA(a);
     robj *o = createObject(OBJ_SET,is);
     o->encoding = OBJ_ENCODING_INTSET;
     return o;

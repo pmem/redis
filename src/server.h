@@ -1500,7 +1500,9 @@ static inline robj *createQuicklistObject(void) { return createQuicklistObjectA(
 static inline robj *createQuicklistObjectM(void) { return createQuicklistObjectA(m_alloc); }
 robj *createZiplistObject(void);
 robj *createSetObject(void);
-robj *createIntsetObject(void);
+robj *createIntsetObjectA(alloc a);
+static inline *createIntsetObject(void) { return createIntsetObjectA(z_alloc); }
+static inline *createIntsetObjectM(void) { return createIntsetObjectA(m_alloc); }
 robj *createHashObject(void);
 robj *createZsetObject(void);
 robj *createZsetZiplistObject(void);
