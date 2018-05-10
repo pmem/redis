@@ -220,21 +220,23 @@ robj *createHashObject(void) {
     return o;
 }
 
-robj *createZsetObject(void) {
+robj *createZsetObjectA(alloc a) {
     zset *zs = zmalloc(sizeof(*zs));
     robj *o;
 
-    zs->dict = dictCreate(&zsetDictType,NULL);
+    zs->dict = dictCreate(&zsetDictType, NULL);
     zs->zsl = zslCreate();
-    o = createObject(OBJ_ZSET,zs);
+    o = createObject(OBJ_ZSET, zs);
+    o->a = a;
     o->encoding = OBJ_ENCODING_SKIPLIST;
     return o;
 }
 
-robj *createZsetZiplistObject(void) {
-    unsigned char *zl = ziplistNew();
+robj *createZsetZiplistObjectA(alloc a) {
+    unsigned char *zl = ziplistNewA(a);
     robj *o = createObject(OBJ_ZSET,zl);
     o->encoding = OBJ_ENCODING_ZIPLIST;
+    o->a = a;
     return o;
 }
 
@@ -278,11 +280,11 @@ void freeZsetObject(robj *o) {
     case OBJ_ENCODING_SKIPLIST:
         zs = o->ptr;
         dictRelease(zs->dict);
-        zslFree(zs->zsl);
+        zslFree(zs->zsl, o->a);
         zfree(zs);
         break;
     case OBJ_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        o->a->free(o->ptr);
         break;
     default:
         serverPanic("Unknown sorted set encoding");
