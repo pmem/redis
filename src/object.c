@@ -231,9 +231,9 @@ robj *createZsetObject(void) {
     return o;
 }
 
-robj *createZsetZiplistObject(void) {
-    unsigned char *zl = ziplistNew();
-    robj *o = createObject(OBJ_ZSET,zl);
+robj *createZsetZiplistObjectA(alloc a) {
+    unsigned char *zl = ziplistNewA(a);
+    robj *o = createObjectA(OBJ_ZSET,zl,a);
     o->encoding = OBJ_ENCODING_ZIPLIST;
     return o;
 }
@@ -282,7 +282,7 @@ void freeZsetObject(robj *o) {
         zfree(zs);
         break;
     case OBJ_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        o->a->free(o->ptr);
         break;
     default:
         serverPanic("Unknown sorted set encoding");
@@ -324,7 +324,8 @@ void decrRefCount(robj *o) {
         case OBJ_MODULE: freeModuleObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        if(o->encoding == OBJ_ENCODING_EMBSTR || o->encoding == OBJ_ENCODING_INT)
+        if(o->encoding == OBJ_ENCODING_EMBSTR || o->encoding == OBJ_ENCODING_INT
+        		|| o->encoding == OBJ_ENCODING_ZIPLIST || o->encoding == OBJ_ENCODING_SKIPLIST)
             o->a->free(o);
         else
             zfree(o);

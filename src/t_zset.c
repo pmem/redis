@@ -964,16 +964,16 @@ unsigned char *zzlFind(unsigned char *zl, sds ele, double *score) {
 
 /* Delete (element,score) pair from ziplist. Use local copy of eptr because we
  * don't want to modify the one given as argument. */
-unsigned char *zzlDelete(unsigned char *zl, unsigned char *eptr) {
+unsigned char *zzlDelete(unsigned char *zl, unsigned char *eptr, alloc a) {
     unsigned char *p = eptr;
 
     /* TODO: add function to ziplist API to delete N elements from offset. */
-    zl = ziplistDelete(zl,&p);
-    zl = ziplistDelete(zl,&p);
+    zl = ziplistDeleteA(zl,&p,a);
+    zl = ziplistDeleteA(zl,&p,a);
     return zl;
 }
 
-unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds ele, double score) {
+unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds ele, double score, alloc a) {
     unsigned char *sptr;
     char scorebuf[128];
     int scorelen;
@@ -981,24 +981,24 @@ unsigned char *zzlInsertAt(unsigned char *zl, unsigned char *eptr, sds ele, doub
 
     scorelen = d2string(scorebuf,sizeof(scorebuf),score);
     if (eptr == NULL) {
-        zl = ziplistPush(zl,(unsigned char*)ele,sdslen(ele),ZIPLIST_TAIL);
-        zl = ziplistPush(zl,(unsigned char*)scorebuf,scorelen,ZIPLIST_TAIL);
+        zl = ziplistPushA(zl,(unsigned char*)ele,sdslen(ele),ZIPLIST_TAIL,a);
+        zl = ziplistPushA(zl,(unsigned char*)scorebuf,scorelen,ZIPLIST_TAIL,a);
     } else {
         /* Keep offset relative to zl, as it might be re-allocated. */
         offset = eptr-zl;
-        zl = ziplistInsert(zl,eptr,(unsigned char*)ele,sdslen(ele));
+        zl = ziplistInsertA(zl,eptr,(unsigned char*)ele,sdslen(ele),a);
         eptr = zl+offset;
 
         /* Insert score after the element. */
         serverAssert((sptr = ziplistNext(zl,eptr)) != NULL);
-        zl = ziplistInsert(zl,sptr,(unsigned char*)scorebuf,scorelen);
+        zl = ziplistInsertA(zl,sptr,(unsigned char*)scorebuf,scorelen,a);
     }
     return zl;
 }
 
 /* Insert (element,score) pair in ziplist. This function assumes the element is
  * not yet present in the list. */
-unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
+unsigned char *zzlInsert(unsigned char *zl, sds ele, double score, alloc a) {
     unsigned char *eptr = ziplistIndex(zl,0), *sptr;
     double s;
 
@@ -1011,12 +1011,12 @@ unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
             /* First element with score larger than score for element to be
              * inserted. This means we should take its spot in the list to
              * maintain ordering. */
-            zl = zzlInsertAt(zl,eptr,ele,score);
+            zl = zzlInsertAt(zl,eptr,ele,score,a);
             break;
         } else if (s == score) {
             /* Ensure lexicographical ordering for elements. */
             if (zzlCompareElements(eptr,(unsigned char*)ele,sdslen(ele)) > 0) {
-                zl = zzlInsertAt(zl,eptr,ele,score);
+                zl = zzlInsertAt(zl,eptr,ele,score,a);
                 break;
             }
         }
@@ -1027,7 +1027,7 @@ unsigned char *zzlInsert(unsigned char *zl, sds ele, double score) {
 
     /* Push on tail of list when it was not yet inserted. */
     if (eptr == NULL)
-        zl = zzlInsertAt(zl,NULL,ele,score);
+        zl = zzlInsertAt(zl,NULL,ele,score,a);
     return zl;
 }
 
@@ -1047,8 +1047,8 @@ unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range, unsig
         score = zzlGetScore(sptr);
         if (zslValueLteMax(score,range)) {
             /* Delete both the element and the score. */
-            zl = ziplistDelete(zl,&eptr);
-            zl = ziplistDelete(zl,&eptr);
+            zl = ziplistDeleteM(zl,&eptr);
+            zl = ziplistDeleteM(zl,&eptr);
             num++;
         } else {
             /* No longer in range. */
@@ -1060,7 +1060,7 @@ unsigned char *zzlDeleteRangeByScore(unsigned char *zl, zrangespec *range, unsig
     return zl;
 }
 
-unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *range, unsigned long *deleted) {
+unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *range, unsigned long *deleted, alloc a) {
     unsigned char *eptr, *sptr;
     unsigned long num = 0;
 
@@ -1074,8 +1074,8 @@ unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *range, unsi
     while ((sptr = ziplistNext(zl,eptr)) != NULL) {
         if (zzlLexValueLteMax(eptr,range)) {
             /* Delete both the element and the score. */
-            zl = ziplistDelete(zl,&eptr);
-            zl = ziplistDelete(zl,&eptr);
+            zl = ziplistDeleteA(zl,&eptr,a);
+            zl = ziplistDeleteA(zl,&eptr,a);
             num++;
         } else {
             /* No longer in range. */
@@ -1092,7 +1092,7 @@ unsigned char *zzlDeleteRangeByLex(unsigned char *zl, zlexrangespec *range, unsi
 unsigned char *zzlDeleteRangeByRank(unsigned char *zl, unsigned int start, unsigned int end, unsigned long *deleted) {
     unsigned int num = (end-start)+1;
     if (deleted) *deleted = num;
-    zl = ziplistDeleteRange(zl,2*(start-1),2*num);
+    zl = ziplistDeleteRangeM(zl,2*(start-1),2*num);
     return zl;
 }
 
@@ -1112,7 +1112,7 @@ unsigned int zsetLength(const robj *zobj) {
     return length;
 }
 
-void zsetConvert(robj *zobj, int encoding) {
+void zsetConvertA(robj *zobj, int encoding, alloc zzla) {
     zset *zs;
     zskiplistNode *node, *next;
     sds ele;
@@ -1151,11 +1151,11 @@ void zsetConvert(robj *zobj, int encoding) {
             zzlNext(zl,&eptr,&sptr);
         }
 
-        zfree(zobj->ptr);
+        zobj->a->free(zobj->ptr);
         zobj->ptr = zs;
         zobj->encoding = OBJ_ENCODING_SKIPLIST;
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
-        unsigned char *zl = ziplistNew();
+        unsigned char *zl = ziplistNewA(zzla);
 
         if (encoding != OBJ_ENCODING_ZIPLIST)
             serverPanic("Unknown target encoding");
@@ -1169,7 +1169,7 @@ void zsetConvert(robj *zobj, int encoding) {
         zfree(zs->zsl);
 
         while (node) {
-            zl = zzlInsertAt(zl,NULL,node->ele,node->score);
+            zl = zzlInsertAt(zl,NULL,node->ele,node->score, zzla);
             next = node->level[0].forward;
             zslFreeNode(node);
             node = next;
@@ -1192,7 +1192,7 @@ void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen) {
 
     if (zset->zsl->length <= server.zset_max_ziplist_entries &&
         maxelelen <= server.zset_max_ziplist_value)
-            zsetConvert(zobj,OBJ_ENCODING_ZIPLIST);
+            zsetConvertA(zobj,OBJ_ENCODING_ZIPLIST,zobj->a);
 }
 
 /* Return (by reference) the score of the specified member of the sorted set
@@ -1258,7 +1258,7 @@ int zsetScore(robj *zobj, sds member, double *score) {
  *
  * The function does not take ownership of the 'ele' SDS string, but copies
  * it if needed. */
-int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
+int zsetAddA(robj *zobj, double score, sds ele, int *flags, double *newscore,alloc a) {
     /* Turn options into simple to check vars. */
     int incr = (*flags & ZADD_INCR) != 0;
     int nx = (*flags & ZADD_NX) != 0;
@@ -1295,19 +1295,19 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
 
             /* Remove and re-insert when score changed. */
             if (score != curscore) {
-                zobj->ptr = zzlDelete(zobj->ptr,eptr);
-                zobj->ptr = zzlInsert(zobj->ptr,ele,score);
+                zobj->ptr = zzlDelete(zobj->ptr,eptr,a);
+                zobj->ptr = zzlInsert(zobj->ptr,ele,score,a);
                 *flags |= ZADD_UPDATED;
             }
             return 1;
         } else if (!xx) {
             /* Optimize: check if the element is too large or the list
              * becomes too long *before* executing zzlInsert. */
-            zobj->ptr = zzlInsert(zobj->ptr,ele,score);
+            zobj->ptr = zzlInsert(zobj->ptr,ele,score,a);
             if (zzlLength(zobj->ptr) > server.zset_max_ziplist_entries)
-                zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);
+                zsetConvertA(zobj,OBJ_ENCODING_SKIPLIST,a);
             if (sdslen(ele) > server.zset_max_ziplist_value)
-                zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);
+                zsetConvertA(zobj,OBJ_ENCODING_SKIPLIST,a);
             if (newscore) *newscore = score;
             *flags |= ZADD_ADDED;
             return 1;
@@ -1374,12 +1374,12 @@ int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore) {
 
 /* Delete the element 'ele' from the sorted set, returning 1 if the element
  * existed and was deleted, 0 otherwise (the element was not there). */
-int zsetDel(robj *zobj, sds ele) {
+int zsetDelA(robj *zobj, sds ele, alloc a) {
     if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
         unsigned char *eptr;
 
         if ((eptr = zzlFind(zobj->ptr,ele,NULL)) != NULL) {
-            zobj->ptr = zzlDelete(zobj->ptr,eptr);
+            zobj->ptr = zzlDelete(zobj->ptr,eptr, a);
             return 1;
         }
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
@@ -1558,7 +1558,7 @@ void zaddGenericCommand(client *c, int flags) {
         {
             zobj = createZsetObject();
         } else {
-            zobj = createZsetZiplistObject();
+            zobj = createZsetZiplistObjectM();
         }
         dbAdd(c->db,key,zobj);
     } else {
@@ -1574,7 +1574,7 @@ void zaddGenericCommand(client *c, int flags) {
         int retflags = flags;
 
         ele = c->argv[scoreidx+1+j*2]->ptr;
-        int retval = zsetAdd(zobj, score, ele, &retflags, &newscore);
+        int retval = zsetAddA(zobj, score, ele, &retflags, &newscore,zobj->a);
         if (retval == 0) {
             addReplyError(c,nanerr);
             goto cleanup;
@@ -1622,7 +1622,7 @@ void zremCommand(client *c) {
         checkType(c,zobj,OBJ_ZSET)) return;
 
     for (j = 2; j < c->argc; j++) {
-        if (zsetDel(zobj,c->argv[j]->ptr)) deleted++;
+        if (zsetDelM(zobj,c->argv[j]->ptr)) deleted++;
         if (zsetLength(zobj) == 0) {
             dbDelete(c->db,key);
             keyremoved = 1;
@@ -1700,7 +1700,7 @@ void zremrangeGenericCommand(client *c, int rangetype) {
             zobj->ptr = zzlDeleteRangeByScore(zobj->ptr,&range,&deleted);
             break;
         case ZRANGE_LEX:
-            zobj->ptr = zzlDeleteRangeByLex(zobj->ptr,&lexrange,&deleted);
+            zobj->ptr = zzlDeleteRangeByLex(zobj->ptr,&lexrange,&deleted, zobj->a);
             break;
         }
         if (zzlLength(zobj->ptr) == 0) {
