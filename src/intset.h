@@ -31,6 +31,7 @@
 #ifndef __INTSET_H
 #define __INTSET_H
 #include <stdint.h>
+#include "alloc.h"
 
 typedef struct intset {
     uint32_t encoding;
@@ -38,7 +39,9 @@ typedef struct intset {
     int8_t contents[];
 } intset;
 
-intset *intsetNew(void);
+intset *intsetNewA(alloc a);
+static inline intset *insetNew(void) { return intsetNewA(z_alloc); }
+static inline intset *insertNewM(void) { return intsetNewA(m_alloc); }
 intset *intsetAdd(intset *is, int64_t value, uint8_t *success);
 intset *intsetRemove(intset *is, int64_t value, int *success);
 uint8_t intsetFind(intset *is, int64_t value);
