@@ -220,13 +220,13 @@ robj *createHashObject(void) {
     return o;
 }
 
-robj *createZsetObject(void) {
+robj *createZsetObjectA(alloc a) {
     zset *zs = zmalloc(sizeof(*zs));
     robj *o;
 
     zs->dict = dictCreate(&zsetDictType,NULL);
     zs->zsl = zslCreate();
-    o = createObject(OBJ_ZSET,zs);
+    o = createObjectA(OBJ_ZSET,zs,a);
     o->encoding = OBJ_ENCODING_SKIPLIST;
     return o;
 }
@@ -278,7 +278,7 @@ void freeZsetObject(robj *o) {
     case OBJ_ENCODING_SKIPLIST:
         zs = o->ptr;
         dictRelease(zs->dict);
-        zslFree(zs->zsl);
+        zslFree(zs->zsl, o->a);
         zfree(zs);
         break;
     case OBJ_ENCODING_ZIPLIST:

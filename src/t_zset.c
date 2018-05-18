@@ -97,19 +97,19 @@ zskiplist *zslCreate(void) {
 /* Free the specified skiplist node. The referenced SDS string representation
  * of the element is freed too, unless node->ele is set to NULL before calling
  * this function. */
-void zslFreeNode(zskiplistNode *node) {
-    sdsfree(node->ele);
+void zslFreeNode(zskiplistNode *node, alloc a) {
+    sdsfreeA(node->ele,a);
     zfree(node);
 }
 
 /* Free a whole skiplist. */
-void zslFree(zskiplist *zsl) {
+void zslFree(zskiplist *zsl, alloc a) {
     zskiplistNode *node = zsl->header->level[0].forward, *next;
 
     zfree(zsl->header);
     while(node) {
         next = node->level[0].forward;
-        zslFreeNode(node);
+        zslFreeNode(node,a);
         node = next;
     }
     zfree(zsl);
@@ -215,7 +215,7 @@ void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
  * it is not freed (but just unlinked) and *node is set to the node pointer,
  * so that it is possible for the caller to reuse the node (including the
  * referenced SDS string at node->ele). */
-int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node) {
+int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node, alloc a) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     int i;
 
@@ -236,7 +236,7 @@ int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node) {
     if (x && score == x->score && sdscmp(x->ele,ele) == 0) {
         zslDeleteNode(zsl, x, update);
         if (!node)
-            zslFreeNode(x);
+            zslFreeNode(x, a);
         else
             *node = x;
         return 1;
@@ -324,7 +324,7 @@ zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range) {
  * Min and max are inclusive, so a score >= min || score <= max is deleted.
  * Note that this function takes the reference to the hash table view of the
  * sorted set, in order to remove the elements from the hash table too. */
-unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, dict *dict) {
+unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, dict *dict, alloc a) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
     int i;
@@ -348,14 +348,14 @@ unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, dict *dic
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl,x,update);
         dictDelete(dict,x->ele);
-        zslFreeNode(x); /* Here is where x->ele is actually released. */
+        zslFreeNode(x,a); /* Here is where x->ele is actually released. */
         removed++;
         x = next;
     }
     return removed;
 }
 
-unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, dict *dict) {
+unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, dict *dict, alloc a) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long removed = 0;
     int i;
@@ -377,7 +377,7 @@ unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, dict *di
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl,x,update);
         dictDelete(dict,x->ele);
-        zslFreeNode(x); /* Here is where x->ele is actually released. */
+        zslFreeNode(x,a); /* Here is where x->ele is actually released. */
         removed++;
         x = next;
     }
@@ -386,7 +386,7 @@ unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, dict *di
 
 /* Delete all the elements with rank between start and end from the skiplist.
  * Start and end are inclusive. Note that start and end need to be 1-based */
-unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, dict *dict) {
+unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned int end, dict *dict, alloc a) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     unsigned long traversed = 0, removed = 0;
     int i;
@@ -406,7 +406,7 @@ unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned 
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl,x,update);
         dictDelete(dict,x->ele);
-        zslFreeNode(x);
+        zslFreeNode(x,a);
         removed++;
         traversed++;
         x = next;
@@ -1112,7 +1112,7 @@ unsigned int zsetLength(const robj *zobj) {
     return length;
 }
 
-void zsetConvertA(robj *zobj, int encoding, alloc zzla) {
+void zsetConvert(robj *zobj, int encoding) {
     zset *zs;
     zskiplistNode *node, *next;
     sds ele;
@@ -1142,9 +1142,9 @@ void zsetConvertA(robj *zobj, int encoding, alloc zzla) {
             score = zzlGetScore(sptr);
             serverAssertWithInfo(NULL,zobj,ziplistGet(eptr,&vstr,&vlen,&vlong));
             if (vstr == NULL)
-                ele = sdsfromlonglong(vlong);
+                ele = sdsfromlonglongA(vlong, zobj->a);
             else
-                ele = sdsnewlen((char*)vstr,vlen);
+                ele = sdsnewlenA((char*)vstr,vlen, zobj->a);
 
             node = zslInsert(zs->zsl,score,ele);
             serverAssert(dictAdd(zs->dict,ele,&node->score) == DICT_OK);
@@ -1155,7 +1155,7 @@ void zsetConvertA(robj *zobj, int encoding, alloc zzla) {
         zobj->ptr = zs;
         zobj->encoding = OBJ_ENCODING_SKIPLIST;
     } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
-        unsigned char *zl = ziplistNewA(zzla);
+        unsigned char *zl = ziplistNewA(zobj->a);
 
         if (encoding != OBJ_ENCODING_ZIPLIST)
             serverPanic("Unknown target encoding");
@@ -1169,9 +1169,9 @@ void zsetConvertA(robj *zobj, int encoding, alloc zzla) {
         zfree(zs->zsl);
 
         while (node) {
-            zl = zzlInsertAt(zl,NULL,node->ele,node->score, zzla);
+            zl = zzlInsertAt(zl,NULL,node->ele,node->score, zobj->a);
             next = node->level[0].forward;
-            zslFreeNode(node);
+            zslFreeNode(node, zobj->a);
             node = next;
         }
 
@@ -1192,7 +1192,7 @@ void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen) {
 
     if (zset->zsl->length <= server.zset_max_ziplist_entries &&
         maxelelen <= server.zset_max_ziplist_value)
-            zsetConvertA(zobj,OBJ_ENCODING_ZIPLIST,zobj->a);
+            zsetConvert(zobj,OBJ_ENCODING_ZIPLIST);
 }
 
 /* Return (by reference) the score of the specified member of the sorted set
@@ -1305,9 +1305,9 @@ int zsetAddA(robj *zobj, double score, sds ele, int *flags, double *newscore,all
              * becomes too long *before* executing zzlInsert. */
             zobj->ptr = zzlInsert(zobj->ptr,ele,score,a);
             if (zzlLength(zobj->ptr) > server.zset_max_ziplist_entries)
-                zsetConvertA(zobj,OBJ_ENCODING_SKIPLIST,a);
+                zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);
             if (sdslen(ele) > server.zset_max_ziplist_value)
-                zsetConvertA(zobj,OBJ_ENCODING_SKIPLIST,a);
+                zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);
             if (newscore) *newscore = score;
             *flags |= ZADD_ADDED;
             return 1;
@@ -1342,12 +1342,12 @@ int zsetAddA(robj *zobj, double score, sds ele, int *flags, double *newscore,all
             /* Remove and re-insert when score changes. */
             if (score != curscore) {
                 zskiplistNode *node;
-                serverAssert(zslDelete(zs->zsl,curscore,ele,&node));
+                serverAssert(zslDelete(zs->zsl,curscore,ele,&node,zobj->a));
                 znode = zslInsert(zs->zsl,score,node->ele);
                 /* We reused the node->ele SDS string, free the node now
                  * since zslInsert created a new one. */
                 node->ele = NULL;
-                zslFreeNode(node);
+                zslFreeNode(node,zobj->a);
                 /* Note that we did not removed the original element from
                  * the hash table representing the sorted set, so we just
                  * update the score. */
@@ -1356,7 +1356,7 @@ int zsetAddA(robj *zobj, double score, sds ele, int *flags, double *newscore,all
             }
             return 1;
         } else if (!xx) {
-            ele = sdsdup(ele);
+            ele = sdsdupA(ele,a);
             znode = zslInsert(zs->zsl,score,ele);
             serverAssert(dictAdd(zs->dict,ele,&znode->score) == DICT_OK);
             *flags |= ZADD_ADDED;
@@ -1400,7 +1400,7 @@ int zsetDelA(robj *zobj, sds ele, alloc a) {
             dictFreeUnlinkedEntry(zs->dict,de);
 
             /* Delete from skiplist. */
-            int retval = zslDelete(zs->zsl,score,ele,NULL);
+            int retval = zslDelete(zs->zsl,score,ele,NULL,zobj->a);
             serverAssert(retval);
 
             if (htNeedsResize(zs->dict)) dictResize(zs->dict);
@@ -1556,7 +1556,7 @@ void zaddGenericCommand(client *c, int flags) {
         if (server.zset_max_ziplist_entries == 0 ||
             server.zset_max_ziplist_value < sdslen(c->argv[scoreidx+1]->ptr))
         {
-            zobj = createZsetObject();
+            zobj = createZsetObjectM();
         } else {
             zobj = createZsetZiplistObjectM();
         }
@@ -1574,7 +1574,7 @@ void zaddGenericCommand(client *c, int flags) {
         int retflags = flags;
 
         ele = c->argv[scoreidx+1+j*2]->ptr;
-        int retval = zsetAddA(zobj, score, ele, &retflags, &newscore,zobj->a);
+        int retval = zsetAddM(zobj, score, ele, &retflags, &newscore);
         if (retval == 0) {
             addReplyError(c,nanerr);
             goto cleanup;
@@ -1711,13 +1711,13 @@ void zremrangeGenericCommand(client *c, int rangetype) {
         zset *zs = zobj->ptr;
         switch(rangetype) {
         case ZRANGE_RANK:
-            deleted = zslDeleteRangeByRank(zs->zsl,start+1,end+1,zs->dict);
+            deleted = zslDeleteRangeByRank(zs->zsl,start+1,end+1,zs->dict, zobj->a);
             break;
         case ZRANGE_SCORE:
-            deleted = zslDeleteRangeByScore(zs->zsl,&range,zs->dict);
+            deleted = zslDeleteRangeByScore(zs->zsl,&range,zs->dict, zobj->a);
             break;
         case ZRANGE_LEX:
-            deleted = zslDeleteRangeByLex(zs->zsl,&lexrange,zs->dict);
+            deleted = zslDeleteRangeByLex(zs->zsl,&lexrange,zs->dict, zobj->a);
             break;
         }
         if (htNeedsResize(zs->dict)) dictResize(zs->dict);
@@ -2000,7 +2000,7 @@ sds zuiSdsFromValue(zsetopval *val) {
 
 /* This is different from zuiSdsFromValue since returns a new SDS string
  * which is up to the caller to free. */
-sds zuiNewSdsFromValue(zsetopval *val) {
+sds zuiNewSdsFromValue(zsetopval *val, alloc a) {
     if (val->flags & OPVAL_DIRTY_SDS) {
         /* We have already one to return! */
         sds ele = val->ele;
@@ -2008,11 +2008,11 @@ sds zuiNewSdsFromValue(zsetopval *val) {
         val->ele = NULL;
         return ele;
     } else if (val->ele) {
-        return sdsdup(val->ele);
+        return sdsdupA(val->ele,a);
     } else if (val->estr) {
-        return sdsnewlen((char*)val->estr,val->elen);
+        return sdsnewlenA((char*)val->estr,val->elen,a);
     } else {
-        return sdsfromlonglong(val->ell);
+        return sdsfromlonglongA(val->ell,a);
     }
 }
 
@@ -2218,7 +2218,7 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
      * algorithm's performance */
     qsort(src,setnum,sizeof(zsetopsrc),zuiCompareByCardinality);
 
-    dstobj = createZsetObject();
+    dstobj = createZsetObjectA(dstkey->a);
     dstzset = dstobj->ptr;
     memset(&zval, 0, sizeof(zval));
 
@@ -2250,7 +2250,7 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
 
                 /* Only continue when present in every input. */
                 if (j == setnum) {
-                    tmp = zuiNewSdsFromValue(&zval);
+                    tmp = zuiNewSdsFromValue(&zval, dstkey->a);
                     znode = zslInsert(dstzset->zsl,score,tmp);
                     dictAdd(dstzset->dict,tmp,&znode->score);
                     if (sdslen(tmp) > maxelelen) maxelelen = sdslen(tmp);
@@ -2285,7 +2285,7 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
                 de = dictAddRaw(accumulator,zuiSdsFromValue(&zval),&existing);
                 /* If we don't have it, we need to create a new entry. */
                 if (!existing) {
-                    tmp = zuiNewSdsFromValue(&zval);
+                    tmp = zuiNewSdsFromValue(&zval, dstkey->a);
                     /* Remember the longest single element encountered,
                      * to understand if it's possible to convert to ziplist
                      * at the end. */
