@@ -1506,7 +1506,9 @@ robj *createZiplistObject(void);
 robj *createSetObject(void);
 robj *createIntsetObject(void);
 robj *createHashObject(void);
-robj *createZsetObject(void);
+robj *createZsetObjectA(alloc a);
+static inline robj *createZsetObject(void){return createZsetObjectA(z_alloc);}
+static inline robj *createZsetObjectM(void){return createZsetObjectA(m_alloc);}
 robj *createZsetZiplistObjectA(alloc a);
 static inline robj *createZsetZiplistObject(void){return createZsetZiplistObjectA(z_alloc);}
 static inline robj *createZsetZiplistObjectM(void){return createZsetZiplistObjectA(m_alloc);}
@@ -1619,10 +1621,10 @@ typedef struct {
 } zlexrangespec;
 
 zskiplist *zslCreate(void);
-void zslFree(zskiplist *zsl);
+void zslFree(zskiplist *zsl, alloc a);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele);
 unsigned char *zzlInsert(unsigned char *zl, sds ele, double score, alloc a);
-int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node);
+int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node, alloc a);
 zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range);
 zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range);
 double zzlGetScore(unsigned char *sptr);
@@ -1631,15 +1633,13 @@ void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 unsigned char *zzlFirstInRange(unsigned char *zl, zrangespec *range);
 unsigned char *zzlLastInRange(unsigned char *zl, zrangespec *range);
 unsigned int zsetLength(const robj *zobj);
-void zsetConvertA(robj *zobj, int encoding, alloc zzla);
-static inline void zsetConvert(robj *zobj, int encoding){zsetConvertA(zobj,encoding,z_alloc);}
-static inline void zsetConvertM(robj *zobj, int encoding){zsetConvertA(zobj,encoding,m_alloc);}
+void zsetConvert(robj *zobj, int encoding);
 void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen);
 int zsetScore(robj *zobj, sds member, double *score);
 unsigned long zslGetRank(zskiplist *zsl, double score, sds o);
 int zsetAddA(robj *zobj, double score, sds ele, int *flags, double *newscore, alloc a);
 static inline int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore){return zsetAddA(zobj,score,ele,flags,newscore,z_alloc);}
-//static inline int zsetAddM(robj *zobj, double score, sds ele, int *flags, double *newscore){return zsetAdd(zobj,score,ele,flags,newscore,m_alloc);}
+static inline int zsetAddM(robj *zobj, double score, sds ele, int *flags, double *newscore){return zsetAddA(zobj,score,ele,flags,newscore,m_alloc);}
 long zsetRank(robj *zobj, sds ele, int reverse);
 int zsetDelA(robj *zobj, sds ele, alloc a);
 static inline int zsetDel(robj *zobj, sds ele){return zsetDelA(zobj,ele,z_alloc);}
