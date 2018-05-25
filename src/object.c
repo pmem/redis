@@ -201,9 +201,10 @@ robj *createZiplistObject(void) {
     return o;
 }
 
-robj *createSetObject(void) {
+robj *createSetObjectA(alloc a) {
     dict *d = dictCreate(&setDictType,NULL);
     robj *o = createObject(OBJ_SET,d);
+    o->a = a;
     o->encoding = OBJ_ENCODING_HT;
     return o;
 }
