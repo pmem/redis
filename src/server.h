@@ -1515,7 +1515,9 @@ robj *createZsetZiplistObjectA(alloc a);
 static inline robj *createZsetZiplistObject(void){return createZsetZiplistObjectA(z_alloc);}
 static inline robj *createZsetZiplistObjectM(void){return createZsetZiplistObjectA(m_alloc);}
 robj *createHashObjectA(alloc a);
-static inline robj *createHashObject(void){return createHashObjectA(z_alloc);}
+static inline robj *createHashObject(void) {
+    return createHashObjectA(z_alloc);
+}
 robj *createModuleObject(moduleType *mt, void *value);
 int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
 int checkType(client *c, robj *o, int type);
