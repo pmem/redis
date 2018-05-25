@@ -42,7 +42,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
 robj *setTypeCreate(sds value) {
     if (isSdsRepresentableAsLongLong(value,NULL) == C_OK)
         return createIntsetObject();
-    return createSetObjectM();
+    return createSetObject();
 }
 
 /* Add the specified value into a set.
@@ -55,7 +55,7 @@ int setTypeAdd(robj *subject, sds value) {
         dict *ht = subject->ptr;
         dictEntry *de = dictAddRaw(ht,value,NULL);
         if (de) {
-            dictSetKey(ht,de,sdsdupM(value));
+            dictSetKey(ht,de,sdsdup(value));
             dictSetVal(ht,de,NULL);
             return 1;
         }
