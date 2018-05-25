@@ -85,14 +85,15 @@ robj *createRawStringObjectA(const char *ptr, size_t len, alloc a) {
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
 robj *createEmbeddedStringObjectA(const char *ptr, size_t len, alloc a) {
-    robj *o = a->alloc(sizeof(robj) + sizeof(struct sdshdr8) + len + 1);
-    struct sdshdr8 *sh = (void*) (o + 1);
+    robj *o = a->alloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1);
+    struct sdshdr8 *sh = (void*)(o+1);
 
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->ptr = sh + 1;
     o->refcount = 1;
     o->a = a;
+
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes() << 8) | LFU_INIT_VAL;
     } else {
@@ -200,9 +201,10 @@ robj *createZiplistObject(void) {
     return o;
 }
 
-robj *createSetObject(void) {
-    dict *d = dictCreate(&setDictType, NULL);
-    robj *o = createObject(OBJ_SET, d);
+robj *createSetObjectA(alloc a) {
+    dict *d = dictCreate(&setDictType,NULL);
+    robj *o = createObject(OBJ_SET,d);
+    o->a = a;
     o->encoding = OBJ_ENCODING_HT;
     return o;
 }
@@ -214,9 +216,10 @@ robj *createIntsetObject(void) {
     return o;
 }
 
-robj *createHashObject(void) {
-    unsigned char *zl = ziplistNew();
+robj *createHashObjectA(alloc a) {
+    unsigned char *zl = ziplistNewA(a);
     robj *o = createObject(OBJ_HASH, zl);
+    o->a = a;
     o->encoding = OBJ_ENCODING_ZIPLIST;
     return o;
 }
@@ -298,7 +301,7 @@ void freeHashObject(robj *o) {
         dictRelease((dict*) o->ptr);
         break;
     case OBJ_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        o->a->free(o->ptr);
         break;
     default:
         serverPanic("Unknown hash encoding type");
