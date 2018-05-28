@@ -39,11 +39,18 @@ typedef void *(*ucalloc)(size_t size);
 typedef void *(*ufree)(void *ptr);
 typedef void *(*urealloc)(void *ptr, size_t size);
 
+int je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
+int jemk_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
+
 struct __alloc {
 	void *(*alloc)(size_t size);
 	void *(*calloc)(size_t size);
 	void *(*realloc)(void *ptr, size_t size);
 	void (*free)(void *ptr);
+	int (*get_defrag_hint)(void* ptr, int *bin_util, int *run_util);
+	size_t (*alloc_size)(void *ptr);
+    void *(*alloc_no_tcache)(size_t size);
+    void (*free_no_tcache)(void *ptr);
 };
 typedef const struct __alloc *alloc;
 
@@ -51,7 +58,11 @@ static const struct __alloc __z_alloc = {
 		zmalloc,
 		zcalloc,
 		zrealloc,
-		zfree
+		zfree,
+		je_get_defrag_hint,
+		NULL, /*TODO*/
+		zmalloc_no_tcache,
+		zfree_no_tcache
 };
 static const struct __alloc *z_alloc = &__z_alloc;
 
@@ -59,7 +70,11 @@ static const struct __alloc __m_alloc = {
 		mmalloc,
 		mcalloc,
 		mrealloc,
-		mfree
+		mfree,
+        NULL, /*TODO*/
+		jemk_malloc_usable_size,
+		mmalloc,
+		NULL, /*TODO*/
 };
 static const struct __alloc *m_alloc = &__m_alloc;
 
