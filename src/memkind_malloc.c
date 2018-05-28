@@ -20,7 +20,6 @@ static size_t used_memory = 0;
 
 void *memkind_alloc_wrapper(size_t size) {
     void *ptr = memkind_malloc(server.pmem_kind1, size);
-    printf("alloc size=%zu, ptr=%p\n",size, ptr);
     if (ptr==NULL) return NULL;
     update_memkind_malloc_stat_alloc(size);
     return (char*)ptr;
@@ -28,7 +27,6 @@ void *memkind_alloc_wrapper(size_t size) {
 
 void *memkind_calloc_wrapper(size_t size) {
     void *ptr = memkind_calloc(server.pmem_kind1, 1, size);
-    printf("calloc size=%zu, ptr=%p\n",size, ptr);
     if (ptr==NULL) return NULL;
     update_memkind_malloc_stat_alloc(size);
     return (char*)ptr;
@@ -39,7 +37,6 @@ void *memkind_realloc_wrapper(void *ptr, size_t size) {
     if (ptr == NULL) return memkind_alloc_wrapper(size);
     oldsize = jemk_malloc_usable_size(ptr);
     void *newptr = memkind_realloc(server.pmem_kind1, ptr, size);
-    printf("realloc,size=%zu, ptr=%p, newptr=%p\n", size, ptr, newptr);
     if (newptr==NULL) return NULL;
 
     update_memkind_malloc_stat_free(oldsize);
@@ -50,11 +47,9 @@ void *memkind_realloc_wrapper(void *ptr, size_t size) {
 void memkind_free_wrapper(void *ptr) {
     if(!ptr) return;
     size_t oldsize;
-    printf("free %p\n", ptr);
     oldsize = jemk_malloc_usable_size(ptr);
     update_memkind_malloc_stat_free(oldsize);
     memkind_free(server.pmem_kind1, ptr);
-    printf("free %p done\n", ptr);
 }
 
 
