@@ -1504,7 +1504,9 @@ robj *createQuicklistObjectA(alloc a);
 static inline robj *createQuicklistObject(void) { return createQuicklistObjectA(z_alloc); }
 static inline robj *createQuicklistObjectM(void) { return createQuicklistObjectA(m_alloc); }
 robj *createZiplistObject(void);
-robj *createSetObject(void);
+robj *createSetObjectA(alloc a);
+static inline robj *createSetObject(void) { return createSetObjectA(z_alloc); }
+static inline robj *createSetObjectM(void) { return createSetObjectA(m_alloc); }
 robj *createHashObjectA(alloc a);
 static inline robj *createHashObject(void) {
     return createHashObjectA(z_alloc);

@@ -42,7 +42,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
 robj *setTypeCreateA(sds value, alloc a) {
     if (isSdsRepresentableAsLongLong(value,NULL) == C_OK)
         return createIntsetObjectA(a);
-    return createSetObject();
+    return createSetObjectA(a);
 }
 
 /* Add the specified value into a set.
@@ -55,7 +55,7 @@ int setTypeAddA(robj *subject, sds value, alloc a) {
         dict *ht = subject->ptr;
         dictEntry *de = dictAddRaw(ht,value,NULL);
         if (de) {
-            dictSetKey(ht,de,sdsdup(value));
+            dictSetKey(ht,de,sdsdupA(value,a));
             dictSetVal(ht,de,NULL);
             return 1;
         }
@@ -76,7 +76,7 @@ int setTypeAddA(robj *subject, sds value, alloc a) {
 
             /* The set *was* an intset and this value is not integer
              * encodable, so dictAdd should always work. */
-            serverAssert(dictAdd(subject->ptr,sdsdup(value),NULL) == DICT_OK);
+            serverAssert(dictAdd(subject->ptr,sdsdupA(value,a),NULL) == DICT_OK);
             return 1;
         }
     } else {
@@ -248,7 +248,7 @@ void setTypeConvert(robj *setobj, int enc) {
         /* To add the elements we extract integers and create redis objects */
         si = setTypeInitIterator(setobj);
         while (setTypeNext(si,&element,&intele) != -1) {
-            element = sdsfromlonglong(intele);
+            element = sdsfromlonglongA(intele,m_alloc);
             serverAssert(dictAdd(d,element,NULL) == DICT_OK);
         }
         setTypeReleaseIterator(si);
@@ -256,7 +256,7 @@ void setTypeConvert(robj *setobj, int enc) {
         setobj->encoding = OBJ_ENCODING_HT;
         setobj->a->free(setobj->ptr);
         setobj->ptr = d;
-        setobj->a = z_alloc;
+        setobj->a = m_alloc;
     } else {
         serverPanic("Unsupported set conversion");
     }
