@@ -3442,7 +3442,6 @@ void usage(void) {
     fprintf(stderr,"       ./redis-server -h or --help\n");
     fprintf(stderr,"       ./redis-server --test-memory <megabytes>\n\n");
     fprintf(stderr,"Examples:\n");
-    fprintf(stderr,"       ./redis-server (run the server with default conf)\n");
     fprintf(stderr,"       ./redis-server /etc/redis/6379.conf\n");
     fprintf(stderr,"       ./redis-server --port 7777\n");
     fprintf(stderr,"       ./redis-server --port 7777 --slaveof 127.0.0.1 8888\n");
@@ -3853,7 +3852,11 @@ int main(int argc, char **argv) {
             (int)getpid());
 
     if (argc == 1) {
-        serverLog(LL_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
+        serverLog(LL_WARNING,
+            "Warning: no config file specified. In order to specify a config file use %s /path/to/%s.conf. Exiting ...",
+                argv[0],
+                server.sentinel_mode ? "sentinel" : "redis");
+        exit(1);
     } else {
         serverLog(LL_WARNING, "Configuration loaded");
     }

@@ -105,12 +105,7 @@ If you want to see a more verbose output use the following:
 Running Redis
 -------------
 
-To run Redis with the default configuration just type:
-
-    % cd src
-    % ./redis-server
-
-If you want to provide your redis.conf, you have to run it using an additional
+To run Redis you have to provide your configuration file and run it using an additional
 parameter (the path of the configuration file):
 
     % cd src
