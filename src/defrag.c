@@ -43,18 +43,18 @@
 
 /* this method was added to jemalloc in order to help us understand which
  * pointers are worthwhile moving and which aren't */
-int je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
+/*int je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);*/
 
 /* Defrag helper for generic allocations.
  *
  * returns NULL in case the allocatoin wasn't moved.
  * when it returns a non-null value, the old pointer was already released
  * and should NOT be accessed. */
-void* activeDefragAlloc(void *ptr) {
+void* activeDefragAllocA(void *ptr, alloc a) {
     int bin_util, run_util;
     size_t size;
     void *newptr;
-    if(!je_get_defrag_hint(ptr, &bin_util, &run_util)) {
+    if(!a->get_defrag_hint(ptr, &bin_util, &run_util)) {
         server.stat_active_defrag_misses++;
         return NULL;
     }
@@ -68,21 +68,24 @@ void* activeDefragAlloc(void *ptr) {
     /* move this allocation to a new allocation.
      * make sure not to use the thread cache. so that we don't get back the same
      * pointers we try to free */
-    size = zmalloc_size(ptr);
-    newptr = zmalloc_no_tcache(size);
+    size = a->alloc_size(ptr);
+    newptr = a->alloc_no_tcache(size);
     memcpy(newptr, ptr, size);
-    zfree_no_tcache(ptr);
+    a->free_no_tcache(ptr);
     return newptr;
 }
+
+static inline void* activeDefragAlloc(void *ptr) { return activeDefragAllocA(ptr,z_alloc); }
+static inline void* activeDefragAllocM(void *ptr) { return activeDefragAllocA(ptr,m_alloc); }
 
 /*Defrag helper for sds strings
  *
  * returns NULL in case the allocatoin wasn't moved.
  * when it returns a non-null value, the old pointer was already released
  * and should NOT be accessed. */
-sds activeDefragSds(sds sdsptr) {
+sds activeDefragSdsA(sds sdsptr, alloc a) {
     void* ptr = sdsAllocPtr(sdsptr);
-    void* newptr = activeDefragAlloc(ptr);
+    void* newptr = activeDefragAllocA(ptr,a);
     if (newptr) {
         size_t offset = sdsptr - (char*)ptr;
         sdsptr = (char*)newptr + offset;
@@ -90,6 +93,9 @@ sds activeDefragSds(sds sdsptr) {
     }
     return NULL;
 }
+
+/*static inline sds activeDefragSds(sds sdsptr) { return activeDefragSdsA(sdsptr,z_alloc); }*/
+static inline sds activeDefragSdsM(sds sdsptr) { return activeDefragSdsA(sdsptr,m_alloc); }
 
 /* Defrag helper for robj and/or string objects
  *
@@ -103,7 +109,11 @@ robj *activeDefragStringOb(robj* ob, int *defragged) {
 
     /* try to defrag robj (only if not an EMBSTR type (handled below). */
     if (ob->type!=OBJ_STRING || ob->encoding!=OBJ_ENCODING_EMBSTR) {
-        if ((ret = activeDefragAlloc(ob))) {
+        if(ob->encoding==OBJ_ENCODING_INT && ob->a==m_alloc)
+            ret = activeDefragAllocM(ob);
+        else
+            ret = activeDefragAlloc(ob);
+        if (ret) {
             ob = ret;
             (*defragged)++;
         }
@@ -112,7 +122,7 @@ robj *activeDefragStringOb(robj* ob, int *defragged) {
     /* try to defrag string object */
     if (ob->type == OBJ_STRING) {
         if(ob->encoding==OBJ_ENCODING_RAW) {
-            sds newsds = activeDefragSds((sds)ob->ptr);
+            sds newsds = activeDefragSdsA((sds)ob->ptr,ob->a);
             if (newsds) {
                 ob->ptr = newsds;
                 (*defragged)++;
@@ -121,7 +131,7 @@ robj *activeDefragStringOb(robj* ob, int *defragged) {
             /* The sds is embedded in the object allocation, calculate the
              * offset and update the pointer in the new allocation. */
             long ofs = (intptr_t)ob->ptr - (intptr_t)ob;
-            if ((ret = activeDefragAlloc(ob))) {
+            if ((ret = activeDefragAllocA(ob,ob->a))) {
                 ret->ptr = (void*)((intptr_t)ret + ofs);
                 (*defragged)++;
             }
@@ -211,7 +221,7 @@ void zslUpdateNode(zskiplist *zsl, zskiplistNode *oldnode, zskiplistNode *newnod
  * only need to defrag the skiplist, but not update the obj pointer.
  * When return value is non-NULL, it is the score reference that must be updated
  * in the dict record. */
-double *zslDefrag(zskiplist *zsl, double score, sds oldele, sds newele) {
+double *zslDefragA(zskiplist *zsl, double score, sds oldele, sds newele, alloc a) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x, *newx;
     int i;
     sds ele = newele? newele: oldele;
@@ -238,7 +248,7 @@ double *zslDefrag(zskiplist *zsl, double score, sds oldele, sds newele) {
         x->ele = newele;
 
     /* try to defrag the skiplist record itself */
-    newx = activeDefragAlloc(x);
+    newx = activeDefragAllocA(x,a);
     if (newx) {
         zslUpdateNode(zsl, x, newx, update);
         return &newx->score;
@@ -282,7 +292,7 @@ int defragKey(redisDb *db, dictEntry *de) {
     sds newsds;
 
     /* Try to defrag the key name. */
-    newsds = activeDefragSds(keysds);
+    newsds = activeDefragSdsM(keysds);
     if (newsds)
         defragged++, de->key = newsds;
     if (dictSize(db->expires)) {
@@ -306,7 +316,7 @@ int defragKey(redisDb *db, dictEntry *de) {
         if (ob->encoding == OBJ_ENCODING_QUICKLIST) {
             quicklist *ql = ob->ptr, *newql;
             quicklistNode *node = ql->head, *newnode;
-            if ((newql = activeDefragAlloc(ql)))
+            if ((newql = activeDefragAllocA(ql,ob->a)))
                 defragged++, ob->ptr = ql = newql;
             while (node) {
                 if ((newnode = activeDefragAlloc(node))) {
@@ -321,12 +331,12 @@ int defragKey(redisDb *db, dictEntry *de) {
                     node = newnode;
                     defragged++;
                 }
-                if ((newzl = activeDefragAlloc(node->zl)))
+                if ((newzl = activeDefragAllocA(node->zl,ob->a)))
                     defragged++, node->zl = newzl;
                 node = node->next;
             }
         } else if (ob->encoding == OBJ_ENCODING_ZIPLIST) {
-            if ((newzl = activeDefragAlloc(ob->ptr)))
+            if ((newzl = activeDefragAllocA(ob->ptr,ob->a)))
                 defragged++, ob->ptr = newzl;
         } else {
             serverPanic("Unknown list encoding");
@@ -337,7 +347,7 @@ int defragKey(redisDb *db, dictEntry *de) {
             di = dictGetIterator(d);
             while((de = dictNext(di)) != NULL) {
                 sds sdsele = dictGetKey(de);
-                if ((newsds = activeDefragSds(sdsele)))
+                if ((newsds = activeDefragSdsM(sdsele)))
                     defragged++, de->key = newsds;
                 defragged += dictIterDefragEntry(di);
             }
@@ -345,7 +355,7 @@ int defragKey(redisDb *db, dictEntry *de) {
             dictDefragTables((dict**)&ob->ptr);
         } else if (ob->encoding == OBJ_ENCODING_INTSET) {
             intset *is = ob->ptr;
-            intset *newis = activeDefragAlloc(is);
+            intset *newis = activeDefragAllocA(is,ob->a);
             if (newis)
                 defragged++, ob->ptr = newis;
         } else {
@@ -353,7 +363,7 @@ int defragKey(redisDb *db, dictEntry *de) {
         }
     } else if (ob->type == OBJ_ZSET) {
         if (ob->encoding == OBJ_ENCODING_ZIPLIST) {
-            if ((newzl = activeDefragAlloc(ob->ptr)))
+            if ((newzl = activeDefragAllocA(ob->ptr,ob->a)))
                 defragged++, ob->ptr = newzl;
         } else if (ob->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = (zset*)ob->ptr;
@@ -371,9 +381,9 @@ int defragKey(redisDb *db, dictEntry *de) {
             while((de = dictNext(di)) != NULL) {
                 double* newscore;
                 sds sdsele = dictGetKey(de);
-                if ((newsds = activeDefragSds(sdsele)))
+                if ((newsds = activeDefragSdsM(sdsele)))
                     defragged++, de->key = newsds;
-                newscore = zslDefrag(zs->zsl, *(double*)dictGetVal(de), sdsele, newsds);
+                newscore = zslDefragA(zs->zsl, *(double*)dictGetVal(de), sdsele, newsds, ob->a);
                 if (newscore) {
                     dictSetVal(d, de, newscore);
                     defragged++;
@@ -387,17 +397,17 @@ int defragKey(redisDb *db, dictEntry *de) {
         }
     } else if (ob->type == OBJ_HASH) {
         if (ob->encoding == OBJ_ENCODING_ZIPLIST) {
-            if ((newzl = activeDefragAlloc(ob->ptr)))
+            if ((newzl = activeDefragAllocA(ob->ptr,ob->a)))
                 defragged++, ob->ptr = newzl;
         } else if (ob->encoding == OBJ_ENCODING_HT) {
             d = ob->ptr;
             di = dictGetIterator(d);
             while((de = dictNext(di)) != NULL) {
                 sds sdsele = dictGetKey(de);
-                if ((newsds = activeDefragSds(sdsele)))
+                if ((newsds = activeDefragSdsM(sdsele)))
                     defragged++, de->key = newsds;
                 sdsele = dictGetVal(de);
-                if ((newsds = activeDefragSds(sdsele)))
+                if ((newsds = activeDefragSdsM(sdsele)))
                     defragged++, de->v.val = newsds;
                 defragged += dictIterDefragEntry(di);
             }
