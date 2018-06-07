@@ -447,6 +447,8 @@ void loadServerConfigFromString(char *config) {
 			}
 			server.pm_file_size = size;
 			server.use_volatile = true;
+        } else if (!strcasecmp(argv[0],"keys-on-pm") && (argc == 2)) {
+            server.keys_on_pm = (!strcasecmp(argv[1], "on") ? true : false);
         } else if (!strcasecmp(argv[0],"appendonly") && argc == 2) {
             int yes;
 
