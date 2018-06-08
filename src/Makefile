@@ -125,9 +125,9 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I$(JEMALLOC_PATH)/include
 #	FINAL_CFLAGS+= -I$(JEMALLOC_PATH)/jemalloc/obj/include
 	FINAL_CFLAGS+= -DJE_PREFIX=je_
-	FINAL_CFLAGS+= -I$(MEMKIND_PATH)/include
+    FINAL_CFLAGS+= -I$(MEMKIND_PATH)/include
 	FINAL_LIBS+= -ldl
-	FINAL_LIBS+= -L$(MEMKIND_PATH)/.libs -lmemkind
+	FINAL_LIBS+= -L$(MEMKIND_PATH)/.libs #-lmemkind
 	FINAL_LIBS+= -L$(JEMALLOC_PATH)/lib/ -ljemalloc
 endif
 
@@ -202,7 +202,7 @@ endif
 
 # redis-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(FINAL_LIBS)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/memkind/.libs/libmemkind.a ../deps/memkind/jemalloc/obj/lib/libjemalloc.a ../deps/jemalloc_JE/lib/libjemalloc.a $(FINAL_LIBS) -lnuma
 
 # redis-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
