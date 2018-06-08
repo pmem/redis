@@ -23,7 +23,7 @@ NODEPS:=clean distclean
 STD=-std=c99 -pedantic -DREDIS_STATIC=''
 WARN=-Wall -W -Wno-missing-field-initializers
 OPT=$(OPTIMIZATION)
-JEMALLOC_PATH=../deps/jemalloc_JE/
+JEMALLOC_PATH=../deps/jemalloc_JE
 MEMKIND_PATH=../deps/memkind
 PREFIX?=/usr/local
 INSTALL_BIN=$(PREFIX)/bin
@@ -123,12 +123,10 @@ endif
 
 ifeq ($(MALLOC),jemalloc)
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I$(JEMALLOC_PATH)/include
-#	FINAL_CFLAGS+= -I$(JEMALLOC_PATH)/jemalloc/obj/include
 	FINAL_CFLAGS+= -DJE_PREFIX=je_
 	FINAL_CFLAGS+= -I$(MEMKIND_PATH)/include
 	FINAL_LIBS+= -ldl
-	FINAL_LIBS+= -L$(MEMKIND_PATH)/.libs -lmemkind
-	FINAL_LIBS+= -L$(JEMALLOC_PATH)/lib/ -ljemalloc
+	FINAL_LIBS+= $(JEMALLOC_PATH)/lib/libjemalloc.a
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
@@ -202,7 +200,7 @@ endif
 
 # redis-server
 $(REDIS_SERVER_NAME): $(REDIS_SERVER_OBJ)
-	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(FINAL_LIBS)
+	$(REDIS_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a $(MEMKIND_PATH)/.libs/libmemkind.a $(MEMKIND_PATH)/jemalloc/obj/lib/libjemalloc.a $(FINAL_LIBS) -lnuma
 
 # redis-sentinel
 $(REDIS_SENTINEL_NAME): $(REDIS_SERVER_NAME)
