@@ -638,7 +638,7 @@ void georadiusGeneric(client *c, int flags) {
         size_t maxelelen = 0;
 
         if (returned_items) {
-            zobj = createZsetObject();
+            zobj = createZsetObjectM();
             zs = zobj->ptr;
         }
 
