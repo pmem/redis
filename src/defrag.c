@@ -97,7 +97,7 @@ sds activeDefragSdsA(sds sdsptr, alloc a) {
     }
     return NULL;
 }
-static inline sds activeDefragSdsM(sds sdsptr) { return activeDefragSdsA(sdsptr,z_alloc); }
+static inline sds activeDefragSdsM(sds sdsptr) { return activeDefragSdsA(sdsptr,m_alloc); }
 
 /* Defrag helper for robj and/or string objects
  *

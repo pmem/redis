@@ -49,6 +49,9 @@
 #endif
 #endif
 
+float getAllocatorFragmentation(size_t *out_frag_bytes);
+float getAllocatorFragmentationM(size_t *out_frag_bytes);
+
 /* ================================= Debugging ============================== */
 
 /* Compute the sha1 of string at 's' with 'len' bytes long.
@@ -472,10 +475,10 @@ void debugCommand(client *c) {
             }
             snprintf(buf,sizeof(buf),"value:%lu",j);
             if (valsize==0)
-                val = createStringObject(buf,strlen(buf));
+                val = createStringObjectM(buf,strlen(buf));
             else {
                 int buflen = strlen(buf);
-                val = createStringObject(NULL,valsize);
+                val = createStringObjectM(NULL,valsize);
                 memcpy(val->ptr, buf, valsize<=buflen? valsize: buflen);
             }
             dbAdd(c->db,key,val);
@@ -556,6 +559,18 @@ void debugCommand(client *c) {
         changeReplicationId();
         clearReplicationId2();
         addReply(c,shared.ok);
+	} else if (!strcasecmp(c->argv[1]->ptr,"frag")) {
+		sds d = sdsempty();
+		size_t frag_bytes;
+        float f = getAllocatorFragmentation(&frag_bytes);
+		d = sdscatprintf(d, "%02f",f);
+        addReplyStatus(c,d);
+	} else if (!strcasecmp(c->argv[1]->ptr,"fragM")) {
+		sds d = sdsempty();
+		size_t frag_bytes;
+        float f = getAllocatorFragmentationM(&frag_bytes);
+		d = sdscatprintf(d, "%02f",f);
+        addReplyStatus(c,d);
     } else {
         addReplyErrorFormat(c, "Unknown DEBUG subcommand or wrong number of arguments for '%s'",
             (char*)c->argv[1]->ptr);
