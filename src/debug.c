@@ -49,8 +49,6 @@
 #endif
 #endif
 
-float getAllocatorFragmentation(size_t *out_frag_bytes);
-float getAllocatorFragmentationM(size_t *out_frag_bytes);
 
 /* ================================= Debugging ============================== */
 
@@ -559,17 +557,17 @@ void debugCommand(client *c) {
         changeReplicationId();
         clearReplicationId2();
         addReply(c,shared.ok);
-	} else if (!strcasecmp(c->argv[1]->ptr,"frag")) {
-		sds d = sdsempty();
-		size_t frag_bytes;
+    } else if (!strcasecmp(c->argv[1]->ptr,"frag")) {
+        sds d = sdsempty();
+        size_t frag_bytes;
         float f = getAllocatorFragmentation(&frag_bytes);
-		d = sdscatprintf(d, "%02f",f);
+        d = sdscatprintf(d, "%02f",f);
         addReplyStatus(c,d);
-	} else if (!strcasecmp(c->argv[1]->ptr,"fragM")) {
-		sds d = sdsempty();
-		size_t frag_bytes;
+    } else if (!strcasecmp(c->argv[1]->ptr,"fragM")) {
+        sds d = sdsempty();
+        size_t frag_bytes;
         float f = getAllocatorFragmentationM(&frag_bytes);
-		d = sdscatprintf(d, "%02f",f);
+        d = sdscatprintf(d, "%02f",f);
         addReplyStatus(c,d);
     } else {
         addReplyErrorFormat(c, "Unknown DEBUG subcommand or wrong number of arguments for '%s'",
