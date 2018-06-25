@@ -311,6 +311,10 @@ void debugCommand(client *c) {
         "htstats <dbid> -- Return hash table statistics of the specified Redis database.");
         blen++; addReplyStatus(c,
         "change-repl-id -- Change the replication IDs of the instance. Dangerous, should be used only for testing the replication subsystem.");
+        blen++; addReplyStatus(c,
+        "frag -- show jemalloc frag level.");
+        blen++; addReplyStatus(c,
+        "fragM -- show memkind frag level.");
         setDeferredMultiBulkLength(c,blenp,blen);
     } else if (!strcasecmp(c->argv[1]->ptr,"segfault")) {
         *((char*)-1) = 'x';
