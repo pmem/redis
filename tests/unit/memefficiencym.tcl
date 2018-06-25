@@ -42,7 +42,7 @@ if 1 {
             test "Active defrag" {
                 r config set activedefrag no
                 r config set active-defrag-threshold-lower 5
-                r config set active-defrag-ignore-bytes 15mb
+                r config set active-defrag-ignore-bytes 2mb
                 r config set maxmemory 30mb
                 r config set maxmemory-policy allkeys-lru
                 r debug populate 700000 qweqweqweqweqweqweqweqwe 150
@@ -51,11 +51,11 @@ if 1 {
                 set frag [r debug frag]
                 set fragM [r debug fragM]
 
-                assert {$frag >= 40}
-                assert {$fragM >= 60}
+                assert {$frag >= 70}
+                assert {$fragM >= 70}
 
                 r config set activedefrag yes
-                after 20000 ;# wait for defrag
+                after 2500 ;# wait for defrag
                 set hits [s active_defrag_hits]
                 # wait for the active defrag to stop working
                 set tries 0
@@ -69,7 +69,6 @@ if 1 {
                     }
                     assert {$tries < 100}
                 }
-                after 10000
 				
                 # TODO: we need to expose more accurate fragmentation info
                 # i.e. the allocator used and active pages
@@ -82,18 +81,15 @@ if 1 {
 
                 # Test the the fragmentation is lower and that the defragger
                 # stopped working
-                #set frag [s mem_fragmentation_ratio]
-                #assert {$frag < 1.55}
-                #set misses [s active_defrag_misses]
-                #after 500
-                #set misses2 [s active_defrag_misses]
-                #assert {$misses2 == $misses}
-                #disabled atm
+                set misses [s active_defrag_misses]
+                after 500
+                set misses2 [s active_defrag_misses]
+                assert {$misses2 == $misses}
 				
                 set frag [r debug frag]
                 set fragM [r debug fragM]
                 assert {$frag < 10}
-                assert {$fragM < 40}
+                assert {$fragM < 10}
             }
         }
     }
