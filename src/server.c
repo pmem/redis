@@ -566,7 +566,16 @@ dictType objectKeyPointerValueDictType = {
 };
 
 /* Set dictionary type. Keys are SDS strings, values are ot used. */
-dictType setDictType = {
+dictType setDictTypeZ = {
+    dictSdsHash,               /* hash function */
+    NULL,                      /* key dup */
+    NULL,                      /* val dup */
+    dictSdsKeyCompare,         /* key compare */
+    dictSdsDestructor,        /* key destructor */
+    NULL                       /* val destructor */
+};
+
+dictType setDictTypeM = {
     dictSdsHash,               /* hash function */
     NULL,                      /* key dup */
     NULL,                      /* val dup */
@@ -633,6 +642,15 @@ dictType hashDictType = {
     dictSdsKeyCompare,          /* key compare */
     dictSdsDestructorM,         /* key destructor */
     dictSdsDestructorM          /* val destructor */
+};
+
+dictType hashDictTypeZ = {
+    dictSdsHash,                /* hash function */
+    NULL,                       /* key dup */
+    NULL,                       /* val dup */
+    dictSdsKeyCompare,          /* key compare */
+    dictSdsDestructor,         /* key destructor */
+    dictSdsDestructor          /* val destructor */
 };
 
 /* Keylist hash table type has unencoded redis objects as keys and
