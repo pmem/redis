@@ -2016,6 +2016,7 @@ void debugCommand(client *c);
 void msetCommand(client *c);
 void msetnxCommand(client *c);
 void zaddCommand(client *c);
+void zaddCommandZ(client *c);
 void zincrbyCommand(client *c);
 void zrangeCommand(client *c);
 void zrangebyscoreCommand(client *c);
