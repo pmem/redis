@@ -57,7 +57,7 @@ void* activeDefragAllocA(void *ptr, alloc a) {
     int bin_util, run_util;
     size_t size;
     void *newptr;
-    if((!cmpAlloc(a,m_alloc) && !(server.active_defrag_mode&DEFRAG_MEMKIND)) || (!cmpAlloc(a,z_alloc) && !(server.active_defrag_mode&DEFRAG_JEMALLOC)))
+    if((!allocCompare(a,m_alloc) && !(server.active_defrag_mode&DEFRAG_MEMKIND)) || (!allocCompare(a,z_alloc) && !(server.active_defrag_mode&DEFRAG_JEMALLOC)))
         return NULL;
     if(!a->get_defrag_hint(ptr, &bin_util, &run_util)) {
         server.stat_active_defrag_misses++;

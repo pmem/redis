@@ -28,7 +28,7 @@
 
 #include "alloc.h"
 
-int cmpAlloc(alloc lhs, alloc rhs) {
+int allocCompare(alloc lhs, alloc rhs) {
     if (lhs->alloc == rhs->alloc &&
             lhs->calloc == rhs->calloc &&
             lhs->realloc == rhs->realloc &&

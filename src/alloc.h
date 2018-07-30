@@ -77,6 +77,6 @@ static const struct __alloc __m_alloc = {
 };
 static const struct __alloc *m_alloc = &__m_alloc;
 
-int cmpAlloc(alloc lhs, alloc rhs);
+int allocCompare(alloc lhs, alloc rhs);
 
 #endif /* __ALLOC_H__ */

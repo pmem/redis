@@ -201,7 +201,7 @@ robj *createZiplistObject(void) {
 }
 
 robj *createSetObjectA(alloc a) {
-    dict *d = dictCreate((!cmpAlloc(a,z_alloc) ? &setDictTypeZ : &setDictTypeM),NULL);
+    dict *d = dictCreate((!allocCompare(a,z_alloc) ? &setDictTypeZ : &setDictTypeM),NULL);
     robj *o = createObject(OBJ_SET,d);
     o->encoding = OBJ_ENCODING_HT;
     o->a = a;
@@ -427,7 +427,7 @@ robj *tryObjectEncodingA(robj *o, alloc a) {
             return shared.integers[value];
         } else {
             if (o->encoding == OBJ_ENCODING_RAW) o->a->free(o->ptr);
-            if (cmpAlloc(o->a,a)) {
+            if (allocCompare(o->a,a)) {
                 robj *newobj = createObjectA(OBJ_STRING,NULL,a);
                 o->a->free(o);
                 o = newobj;
@@ -445,7 +445,7 @@ robj *tryObjectEncodingA(robj *o, alloc a) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT) {
         robj *emb;
 
-        if (o->encoding == OBJ_ENCODING_EMBSTR && !cmpAlloc(o->a,a)) return o;
+        if (o->encoding == OBJ_ENCODING_EMBSTR && !allocCompare(o->a,a)) return o;
         emb = createEmbeddedStringObjectA(s,sdslen(s),a);
         decrRefCount(o);
         return emb;
@@ -462,7 +462,7 @@ robj *tryObjectEncodingA(robj *o, alloc a) {
      * OBJ_ENCODING_EMBSTR_SIZE_LIMIT. */
     if (o->encoding == OBJ_ENCODING_RAW &&
         sdsavail(s) > len/10 &&
-        !cmpAlloc(o->a,a)) {
+        !allocCompare(o->a,a)) {
         o->ptr = sdsRemoveFreeSpaceA(o->ptr,a);
     } else {
         sds copy = sdsdupA(o->ptr,a);
@@ -1088,7 +1088,7 @@ void objectCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr,"allocator") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
                 == NULL) return;
-        addReplyBulkCString(c,!cmpAlloc(o->a,z_alloc) ? "zmalloc" : "memkind");
+        addReplyBulkCString(c,!allocCompare(o->a,z_alloc) ? "zmalloc" : "memkind");
     } else {
         addReplyErrorFormat(c, "Unknown subcommand or wrong number of arguments for '%s'. Try OBJECT help",
             (char *)c->argv[1]->ptr);
