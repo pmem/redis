@@ -202,7 +202,7 @@ int hashTypeExists(robj *o, sds field) {
 
 int hashTypeSetA(robj *o, sds field, sds value, int flags, alloc a) {
     int update = 0;
-
+    serverAssert(!cmpAlloc(o->a,a));
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
         unsigned char *zl, *fptr, *vptr;
 

@@ -133,13 +133,13 @@ robj *createStringObjectFromLongLongA(long long value, alloc a) {
         o = shared.integers[value];
     } else {
         if (value >= LONG_MIN && value <= LONG_MAX) {
-            o = createObject(OBJ_STRING, NULL);
+            o = createObjectA(OBJ_STRING,NULL,a);
             o->encoding = OBJ_ENCODING_INT;
             o->ptr = (void*)((long)value);
         } else {
             o = createObject(OBJ_STRING,sdsfromlonglongA(value, a));
-            o->a = a;
         }
+        o->a = a;
     }
     return o;
 }
@@ -426,8 +426,8 @@ robj *tryObjectEncodingA(robj *o, alloc a) {
             incrRefCount(shared.integers[value]);
             return shared.integers[value];
         } else {
-            if (o->encoding == OBJ_ENCODING_RAW) sdsfree(o->ptr);
-            if (o->a != a) {
+            if (o->encoding == OBJ_ENCODING_RAW) o->a->free(o->ptr);
+            if (cmpAlloc(o->a,a)) {
                 robj *newobj = createObjectA(OBJ_STRING,NULL,a);
                 o->a->free(o);
                 o = newobj;
@@ -462,11 +462,9 @@ robj *tryObjectEncodingA(robj *o, alloc a) {
      * OBJ_ENCODING_EMBSTR_SIZE_LIMIT. */
     if (o->encoding == OBJ_ENCODING_RAW &&
         sdsavail(s) > len/10 &&
-        !cmpAlloc(o->a,a))
-    {
+        !cmpAlloc(o->a,a)) {
         o->ptr = sdsRemoveFreeSpaceA(o->ptr,a);
-    }
-    else {
+    } else {
         sds copy = sdsdupA(o->ptr,a);
         sdsfreeA (o->ptr,o->a);
         o->ptr = copy;
@@ -1090,7 +1088,7 @@ void objectCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr,"allocator") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
                 == NULL) return;
-        addReplyBulkCString(c,!memcmp(o->a,z_alloc, sizeof(*z_alloc)) ? "zmalloc" : "memkind");
+        addReplyBulkCString(c,!cmpAlloc(o->a,z_alloc) ? "zmalloc" : "memkind");
     } else {
         addReplyErrorFormat(c, "Unknown subcommand or wrong number of arguments for '%s'. Try OBJECT help",
             (char *)c->argv[1]->ptr);

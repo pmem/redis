@@ -62,7 +62,7 @@ int setTypeAddA(robj *subject, sds value, alloc a) {
     } else if (subject->encoding == OBJ_ENCODING_INTSET) {
         if (isSdsRepresentableAsLongLong(value,&llval) == C_OK) {
             uint8_t success = 0;
-            serverAssert(subject->a->alloc == a->alloc);
+            serverAssert(!cmpAlloc(subject->a,a));
             subject->ptr = intsetAddA(subject->ptr,llval,&success, a);
             if (success) {
                 /* Convert to regular set when the intset contains
@@ -234,6 +234,7 @@ unsigned long setTypeSize(const robj *subject) {
  * to a hash table) is presized to hold the number of elements in the original
  * set. */
 void setTypeConvertA(robj *setobj, int enc, alloc a) {
+    serverAssert(!cmpAlloc(setobj->a,a));
     setTypeIterator *si;
     serverAssertWithInfo(NULL,setobj,setobj->type == OBJ_SET &&
                              setobj->encoding == OBJ_ENCODING_INTSET);
