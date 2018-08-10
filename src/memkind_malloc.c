@@ -2,6 +2,8 @@
 #include "atomicvar.h"
 
 #include <memkind.h>
+#include <libpmem.h>
+
 
 #define update_memkind_malloc_stat_alloc(__n) do { \
     size_t _n = (__n); \
@@ -67,4 +69,11 @@ size_t memkind_malloc_used_memory(void){
     size_t um;
     atomicGet(used_memory,um);
     return um;
+}
+
+void *pmem_memcpy_wrapper(void *pmemdest, const void *src, size_t len){
+    return pmem_memcpy(pmemdest, src, len ,PMEM_F_MEM_NONTEMPORAL|PMEM_F_MEM_NODRAIN);
+}
+void *pmem_memset_wrapper(void *pmemdest, int c, size_t len){
+    return pmem_memset(pmemdest, c, len ,PMEM_F_MEM_NONTEMPORAL|PMEM_F_MEM_NODRAIN);
 }

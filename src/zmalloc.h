@@ -85,6 +85,8 @@ size_t zmalloc_get_private_dirty(long pid);
 size_t zmalloc_get_smap_bytes_by_field(char *field, long pid);
 size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
+void *zmemcpy(void* dst, const void* src, size_t num);
+void *zmemset(void* ptr, int value, size_t num);
 
 #ifdef HAVE_DEFRAG
 void zfree_no_tcache(void *ptr);

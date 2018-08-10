@@ -36,7 +36,9 @@ int allocCompare(alloc lhs, alloc rhs) {
             lhs->alloc_size == rhs->alloc_size &&
             lhs->alloc_no_tcache == rhs->alloc_no_tcache &&
             lhs->free_no_tcache == rhs->free_no_tcache &&
-            lhs->get_defrag_hint == rhs->get_defrag_hint) {
+            lhs->get_defrag_hint == rhs->get_defrag_hint &&
+            lhs->memcpy == rhs->memcpy &&
+            lhs->memset == rhs->memset) {
         return 0;
     }
     return -1;

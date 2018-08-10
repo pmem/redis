@@ -51,6 +51,8 @@ struct __alloc {
     void *(*alloc_no_tcache)(size_t size);
     void (*free_no_tcache)(void *ptr);
     int (*get_defrag_hint)(void* ptr, int *bin_util, int *run_util);
+    void *(*memcpy)(void* dst, const void * src, size_t num);
+    void *(*memset)( void* ptr, int value, size_t num);
 };
 typedef const struct __alloc *alloc;
 
@@ -62,7 +64,9 @@ static const struct __alloc __z_alloc = {
     je_malloc_usable_size, /*zmalloc_size,*/
     zmalloc_no_tcache,
     zfree_no_tcache,
-    je_get_defrag_hint
+    je_get_defrag_hint,
+    zmemcpy,
+    zmemset
 };
 static const struct __alloc *z_alloc = &__z_alloc;
 
@@ -74,7 +78,9 @@ static const struct __alloc __m_alloc = {
     mmalloc_usable_size,
     mmalloc,
     mfree_no_tcache,
-    mget_defrag_hint
+    mget_defrag_hint,
+    mmemcpy,
+    mmemset
 };
 static const struct __alloc *m_alloc = &__m_alloc;
 

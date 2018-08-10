@@ -214,6 +214,12 @@ size_t zmalloc_used_memory(void) {
     atomicGet(used_memory,um);
     return um;
 }
+void *zmemcpy(void* dst, const void* src, size_t num){
+    return memcpy(dst, src, num);
+}
+void *zmemset(void* dst, int value, size_t num){
+    return memset(dst, value, num);
+}
 
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
     zmalloc_oom_handler = oom_handler;

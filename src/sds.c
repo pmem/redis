@@ -92,7 +92,7 @@ sds sdsnewlenA(const void *init, size_t initlen, alloc a) {
 
     sh = a->alloc(hdrlen+initlen+1);
     if (!init)
-        memset(sh, 0, hdrlen+initlen+1);
+        a->memset(sh, 0, hdrlen+initlen+1);
     if (sh == NULL) return NULL;
     s = (char*)sh+hdrlen;
     fp = ((unsigned char*)s)-1;
@@ -131,7 +131,7 @@ sds sdsnewlenA(const void *init, size_t initlen, alloc a) {
         }
     }
     if (initlen && init)
-        memcpy(s, init, initlen);
+        a->memcpy(s, init, initlen);
     s[initlen] = '\0';
     return s;
 }
