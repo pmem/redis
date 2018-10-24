@@ -43,6 +43,12 @@ After building Redis, it is a good idea to test it using:
 
     % make test
 
+Prerequisites
+---------
+You will need to install the following required package on the build system:
+
+* [PMDK](https://github.com/pmem/pmdk/releases) (v1.5 or later)
+
 Fixing build problems with dependencies or cached build options
 ---------
 
