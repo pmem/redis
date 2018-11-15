@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Intel Corporation.
+ * Copyright (C) 2017 - 2018 Intel Corporation.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -23,43 +23,46 @@
  */
 
 #pragma once
-#include <iostream>
+#include <cstring>
 #include <fstream>
-#include "common.h"
 
-namespace ProcStat
+class ProcStat
 {
-    std::string get_stat(const std::string& field_name)
+public:
+    size_t get_virtual_memory_size_bytes()
     {
-        std::string file_name = "/proc/self/status";
-        std::ifstream file(file_name);
-        std::string line;
-        while (std::getline(file, line))
-        {
-            if (!line.compare(0, field_name.size(), field_name))
-            {
-                line.erase(0, field_name.size() + 1);
-                size_t start = line.find_first_not_of(" \t");
-                return line.substr(start);
+        get_stat("VmSize", str_value);
+        return strtol(str_value, NULL, 10) * 1024;
+    }
+
+    size_t get_physical_memory_size_bytes()
+    {
+        get_stat("VmRSS", str_value);
+        return strtol(str_value, NULL, 10) * 1024;
+    }
+private:
+    /* We are avoiding to allocate local buffers,
+     * since it can produce noise in memory footprint tests.
+     */
+    char line[1024];
+    char current_entry_name[1024];
+    char str_value[1024];
+
+    // Note: this function is not thread-safe.
+    void get_stat(const char* field_name, char* value)
+    {
+        char* pos = nullptr;
+        std::ifstream file("/proc/self/status", std::ifstream::in);
+        if (file.is_open()) {
+            while (file.getline(line, sizeof(line))) {
+                pos = strstr(line, field_name);
+                if (pos) {
+                    sscanf(pos, "%64[a-zA-Z_0-9()]: %s", current_entry_name, value);
+                    break;
+                }
             }
+            file.close();
         }
-        return "";
     }
-
-    unsigned extract_leading_number(const std::string& value)
-    {
-        size_t number_end = value.find_first_not_of("0123456789");
-        return std::stoi(value.substr(0, number_end));
-    }
-
-    size_t get_virtual_memory_size()
-    {
-        return extract_leading_number(get_stat("VmSize")) * KB;
-    }
-
-    size_t get_physical_memory_size()
-    {
-        return extract_leading_number(get_stat("VmRSS")) * KB;
-    }
-}
+};
 

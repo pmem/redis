@@ -1,5 +1,5 @@
 #
-#  Copyright (C) 2014 - 2017 Intel Corporation.
+#  Copyright (C) 2014 - 2018 Intel Corporation.
 #  All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -32,9 +32,10 @@ check_PROGRAMS += test/all_tests \
                   test/trace_mechanism_test_helper \
                   test/gb_page_tests_bind_policy \
                   test/freeing_memory_segfault_test \
+                  test/locality_test \
                   # end
 
-TESTS += test/check.sh
+TESTS += test/test.sh
 
 EXTRA_DIST += test/memkind-afts.ts \
               test/memkind-afts-ext.ts \
@@ -46,6 +47,7 @@ EXTRA_DIST += test/memkind-afts.ts \
               test/autohbw_test.py \
               test/trace_mechanism_test.py \
               test/python_framework/cmd_helper.py \
+              test/python_framework/huge_page_organizer.py \
               test/python_framework/__init__.py \
               test/draw_plots.py \
               test/run_alloc_benchmark.sh \
@@ -83,6 +85,7 @@ test_all_tests_SOURCES = $(fused_gtest) \
                          test/error_message_tests.cpp \
                          test/get_arena_test.cpp \
                          test/memkind_pmem_tests.cpp \
+                         test/memkind_pmem_long_time_tests.cpp \
                          test/performance/operations.hpp \
                          test/performance/perf_tests.hpp \
                          test/performance/perf_tests.cpp \
@@ -93,7 +96,14 @@ test_all_tests_SOURCES = $(fused_gtest) \
                          test/static_kinds_tests.cpp \
                          test/hbw_verify_function_test.cpp \
                          test/dlopen_test.cpp \
+                         test/pmem_allocator_tests.cpp \
                          #end
+
+test_locality_test_SOURCES = $(fused_gtest) test/allocator_perf_tool/Allocation_info.cpp test/locality_test.cpp
+test_locality_test_LDADD = libmemkind.la
+
+test_locality_test_CPPFLAGS = -fopenmp -O0 -Wno-error $(AM_CPPFLAGS)
+test_locality_test_CXXFLAGS = -fopenmp -O0 -Wno-error $(AM_CPPFLAGS)
 
 test_environ_err_hbw_malloc_test_SOURCES = test/environ_err_hbw_malloc_test.cpp
 test_decorator_test_SOURCES = $(fused_gtest) test/decorator_test.cpp test/decorator_test.h
@@ -112,10 +122,6 @@ allocator_perf_tool_library_sources = test/allocator_perf_tool/AllocationSizes.h
                                       test/allocator_perf_tool/CommandLine.hpp \
                                       test/allocator_perf_tool/Configuration.hpp \
                                       test/allocator_perf_tool/ConsoleLog.hpp \
-                                      test/allocator_perf_tool/FootprintSampling.cpp \
-                                      test/allocator_perf_tool/FootprintSampling.h \
-                                      test/allocator_perf_tool/FootprintTask.cpp \
-                                      test/allocator_perf_tool/FootprintTask.h \
                                       test/allocator_perf_tool/FunctionCalls.hpp \
                                       test/allocator_perf_tool/FunctionCallsPerformanceTask.cpp \
                                       test/allocator_perf_tool/FunctionCallsPerformanceTask.h \
@@ -123,10 +129,10 @@ allocator_perf_tool_library_sources = test/allocator_perf_tool/AllocationSizes.h
                                       test/allocator_perf_tool/Iterator.hpp \
                                       test/allocator_perf_tool/JemallocAllocatorWithTimer.hpp \
                                       test/allocator_perf_tool/MemkindAllocatorWithTimer.hpp \
-                                      test/allocator_perf_tool/MemoryFootprintStats.hpp \
                                       test/allocator_perf_tool/Numastat.hpp \
                                       test/allocator_perf_tool/Runnable.hpp \
-                                      test/allocator_perf_tool/Sample.hpp \
+                                      test/allocator_perf_tool/PmemMockup.cpp \
+                                      test/allocator_perf_tool/PmemMockup.hpp \
                                       test/allocator_perf_tool/ScenarioWorkload.cpp \
                                       test/allocator_perf_tool/ScenarioWorkload.h \
                                       test/allocator_perf_tool/StandardAllocatorWithTimer.hpp \
@@ -185,6 +191,7 @@ endif
 check_PROGRAMS += test/alloc_benchmark_hbw \
                   test/alloc_benchmark_glibc \
                   test/alloc_benchmark_tbb \
+                  test/alloc_benchmark_pmem \
                   # end
 
 test_alloc_benchmark_hbw_LDADD = libmemkind.la
@@ -202,16 +209,28 @@ test_alloc_benchmark_tbb_SOURCES = test/alloc_benchmark.c \
                                    # end
 test_alloc_benchmark_tbb_CFLAGS = -O0 -g -fopenmp -Wall -DTBBMALLOC -ldl
 
+test_alloc_benchmark_pmem_LDADD = libmemkind.la
+test_alloc_benchmark_pmem_SOURCES = test/alloc_benchmark.c
+test_alloc_benchmark_pmem_CFLAGS = -O0 -g -fopenmp -Wall -DPMEMMALLOC -ldl
+
 # Examples as tests
 check_PROGRAMS += test/hello_memkind \
                   test/autohbw_candidates \
                   test/hello_memkind_debug \
                   test/hello_hbw \
                   test/filter_memkind \
-                  test/pmem \
+                  test/pmem_kinds \
+                  test/pmem_malloc \
+                  test/pmem_malloc_unlimited \
+                  test/pmem_usable_size \
+                  test/pmem_alignment \
+                  test/pmem_and_default_kind \
+                  test/pmem_multithreads \
+                  test/pmem_multithreads_onekind \
                   # end
 if HAVE_CXX11
-check_PROGRAMS += test/memkind_allocated
+check_PROGRAMS += test/memkind_allocated \
+                  test/pmem_cpp_allocator
 endif
 
 
@@ -219,22 +238,42 @@ test_hello_memkind_LDADD = libmemkind.la
 test_hello_memkind_debug_LDADD = libmemkind.la
 test_hello_hbw_LDADD = libmemkind.la
 test_filter_memkind_LDADD = libmemkind.la
-test_pmem_LDADD = libmemkind.la
+test_pmem_kinds_LDADD = libmemkind.la
+test_pmem_malloc_LDADD = libmemkind.la
+test_pmem_malloc_unlimited_LDADD = libmemkind.la
+test_pmem_usable_size_LDADD = libmemkind.la
+test_pmem_alignment_LDADD = libmemkind.la
+test_pmem_and_default_kind_LDADD = libmemkind.la
+test_pmem_multithreads_LDADD = libmemkind.la
+test_pmem_multithreads_onekind_LDADD = libmemkind.la
 test_autohbw_candidates_LDADD = libmemkind.la \
                                 # end
 if HAVE_CXX11
 test_memkind_allocated_LDADD = libmemkind.la
+test_pmem_cpp_allocator_LDADD = libmemkind.la
 endif
 
 test_hello_memkind_SOURCES = examples/hello_memkind_example.c
 test_hello_memkind_debug_SOURCES = examples/hello_memkind_example.c examples/memkind_decorator_debug.c
 test_hello_hbw_SOURCES = examples/hello_hbw_example.c
 test_filter_memkind_SOURCES = examples/filter_example.c
-test_pmem_SOURCES = examples/pmem_example.c
+test_pmem_kinds_SOURCES = examples/pmem_kinds.c
+test_pmem_malloc_SOURCES = examples/pmem_malloc.c
+test_pmem_malloc_unlimited_SOURCES = examples/pmem_malloc_unlimited.c
+test_pmem_usable_size_SOURCES = examples/pmem_usable_size.c
+test_pmem_alignment_SOURCES = examples/pmem_alignment.c
+test_pmem_and_default_kind_SOURCES = examples/pmem_and_default_kind.c
+test_pmem_multithreads_SOURCES = examples/pmem_multithreads.c
+test_pmem_multithreads_onekind_SOURCES = examples/pmem_multithreads_onekind.c
 test_autohbw_candidates_SOURCES = examples/autohbw_candidates.c
 test_libautohbw_la_SOURCES = autohbw/autohbw.c
 noinst_LTLIBRARIES += test/libautohbw.la
 if HAVE_CXX11
 test_memkind_allocated_SOURCES = examples/memkind_allocated_example.cpp examples/memkind_allocated.hpp
+test_pmem_cpp_allocator_SOURCES = examples/pmem_cpp_allocator.cpp
 endif
 
+clean-local: test-clean
+
+test-clean:
+	find test \( -name "*.gcda" -o -name "*.gcno" \) -type f -delete

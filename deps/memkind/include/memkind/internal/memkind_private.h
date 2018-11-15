@@ -60,16 +60,20 @@ extern "C" {
 #define JE_SYMBOL(b)     JE_SYMBOL1(JE_PREFIX, b)
 
 // Redefine symbols
-#define jemk_malloc         JE_SYMBOL(malloc)
-#define jemk_mallocx        JE_SYMBOL(mallocx)
-#define jemk_calloc         JE_SYMBOL(calloc)
-#define jemk_rallocx        JE_SYMBOL(rallocx)
-#define jemk_dallocx        JE_SYMBOL(dallocx)
-#define jemk_realloc        JE_SYMBOL(realloc)
-#define jemk_mallctl        JE_SYMBOL(mallctl)
-#define jemk_memalign       JE_SYMBOL(memalign)
-#define jemk_posix_memalign JE_SYMBOL(posix_memalign)
-#define jemk_free           JE_SYMBOL(free)
+#define jemk_malloc                 JE_SYMBOL(malloc)
+#define jemk_mallocx                JE_SYMBOL(mallocx)
+#define jemk_calloc                 JE_SYMBOL(calloc)
+#define jemk_rallocx                JE_SYMBOL(rallocx)
+#define jemk_realloc                JE_SYMBOL(realloc)
+#define jemk_mallctl                JE_SYMBOL(mallctl)
+#define jemk_memalign               JE_SYMBOL(memalign)
+#define jemk_posix_memalign         JE_SYMBOL(posix_memalign)
+#define jemk_free                   JE_SYMBOL(free)
+#define jemk_dallocx                JE_SYMBOL(dallocx)
+#define jemk_malloc_usable_size     JE_SYMBOL(malloc_usable_size)
+
+/// \note EXPERIMENTAL API
+int je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
 
 enum memkind_const_private {
     MEMKIND_NAME_LENGTH_PRIV = 64
@@ -80,7 +84,8 @@ struct memkind_ops {
     int (* destroy)(struct memkind *kind);
     void *(* malloc)(struct memkind *kind, size_t size);
     void *(* calloc)(struct memkind *kind, size_t num, size_t size);
-    int (* posix_memalign)(struct memkind *kind, void **memptr, size_t alignment, size_t size);
+    int (* posix_memalign)(struct memkind *kind, void **memptr, size_t alignment,
+                           size_t size);
     void *(* realloc)(struct memkind *kind, void *ptr, size_t size);
     void (* free)(struct memkind *kind, void *ptr);
     void *(* mmap)(struct memkind *kind, void *addr, size_t size);
@@ -88,12 +93,14 @@ struct memkind_ops {
     int (* madvise)(struct memkind *kind, void *addr, size_t size);
     int (* get_mmap_flags)(struct memkind *kind, int *flags);
     int (* get_mbind_mode)(struct memkind *kind, int *mode);
-    int (* get_mbind_nodemask)(struct memkind *kind, unsigned long *nodemask, unsigned long maxnode);
+    int (* get_mbind_nodemask)(struct memkind *kind, unsigned long *nodemask,
+                               unsigned long maxnode);
     int (* get_arena)(struct memkind *kind, unsigned int *arena, size_t size);
     int (* check_available)(struct memkind *kind);
     int (* check_addr)(struct memkind *kind, void *addr);
-    void (*init_once)(void);
+    void (* init_once)(void);
     int (* finalize)(struct memkind *kind);
+    size_t (* malloc_usable_size)(struct memkind *kind, void *addr);
 };
 
 struct memkind {
@@ -105,31 +112,14 @@ struct memkind {
     unsigned int *arena_map; // To be deleted beyond 1.2.0+
     pthread_key_t arena_key;
     void *priv;
-    unsigned int arena_map_mask; // arena_map_len - 1 to optimize modulo operation on arena_map_len
+    unsigned int
+    arena_map_mask; // arena_map_len - 1 to optimize modulo operation on arena_map_len
     unsigned int arena_zero; // index first jemalloc arena of this kind
 };
 
 void memkind_init(memkind_t kind, bool check_numa);
 
 void *kind_mmap(struct memkind *kind, void* addr, size_t size);
-
-enum memkind_base_partition {
-    MEMKIND_PARTITION_DEFAULT = 0,
-    MEMKIND_PARTITION_HBW = 1,
-    MEMKIND_PARTITION_HBW_HUGETLB = 2,
-    MEMKIND_PARTITION_HBW_PREFERRED = 3,
-    MEMKIND_PARTITION_HBW_PREFERRED_HUGETLB = 4,
-    MEMKIND_PARTITION_HUGETLB = 5,
-    MEMKIND_PARTITION_HBW_GBTLB = 6,
-    MEMKIND_PARTITION_HBW_PREFERRED_GBTLB = 7,
-    MEMKIND_PARTITION_GBTLB = 8,
-    MEMKIND_PARTITION_HBW_INTERLEAVE = 9,
-    MEMKIND_PARTITION_INTERLEAVE = 10,
-    MEMKIND_PARTITION_REGULAR = 11,
-    MEMKIND_PARTITION_HBW_ALL = 12,
-    MEMKIND_PARTITION_HBW_ALL_HUGETLB = 13,
-    MEMKIND_NUM_BASE_KIND
-};
 
 #ifdef __cplusplus
 }

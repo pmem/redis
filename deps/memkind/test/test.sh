@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-#  Copyright (C) 2014 - 2016 Intel Corporation.
+#  Copyright (C) 2014 - 2018 Intel Corporation.
 #  All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -45,7 +45,7 @@ err=0
 function usage () {
    cat <<EOF
 
-Usage: $PROGNAME [-c csv_file] [-l log_file] [-f test_filter] [-T tests_dir] [-d] [-m] [-g] [-h] [-p]
+Usage: $PROGNAME [-c csv_file] [-l log_file] [-f test_filter] [-T tests_dir] [-d] [-m] [-p] [-x] [-s] [-h]
 
 OPTIONS
     -c,
@@ -64,6 +64,8 @@ OPTIONS
         skip python tests
     -x,
         skip tests that are passed as value
+    -s,
+        run disabled test (e.g. pmem long time stress test)
     -h,
         parameter added to display script usage
 EOF
@@ -142,7 +144,7 @@ function execute_gtest()
         fi
     fi
     # Concatenate test command
-    TESTCMD=$(printf "$TESTCMD" "$TEST""$SKIPPED_GTESTS")
+    TESTCMD=$(printf "$TESTCMD" "$TEST""$SKIPPED_GTESTS""$RUN_DISABLED_GTEST")
     # And test prefix if applicable
     if [ "$TEST_PREFIX" != "" ]; then
         TESTCMD=$(printf "$TEST_PREFIX" "$TESTCMD")
@@ -228,12 +230,12 @@ fi
 ret=$(memkind-hbw-nodes)
 if [[ $ret == "" ]]; then
     export MEMKIND_HBW_NODES=1
-    TEST_PREFIX="numactl --membind=0 %s"
+    TEST_PREFIX="numactl --membind=0 --cpunodebind=$MEMKIND_HBW_NODES %s"
 fi
 
 OPTIND=1
 
-while getopts "T:c:f:l:hdmgx:p:" opt; do
+while getopts "T:c:f:l:hdmsx:p:" opt; do
     case "$opt" in
         T)
             TEST_PATH=$OPTARG;
@@ -283,6 +285,10 @@ while getopts "T:c:f:l:hdmgx:p:" opt; do
                 SKIPPED_GTESTS=$SKIPPED_GTESTS":"$OPTARG
             fi
             show_skipped_tests "$OPTARG"
+            ;;
+        s)
+            echo "Run also disabled tests"
+            RUN_DISABLED_GTEST=" --gtest_also_run_disabled_tests"
             ;;
         h)
             usage;

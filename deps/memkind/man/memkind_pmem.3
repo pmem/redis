@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (C) 2014 - 2017 Intel Corporation.
+.\" Copyright (C) 2014 - 2018 Intel Corporation.
 .\" All rights reserved.
 .\"
 .\" Redistribution and use in source and binary forms, with or without
@@ -25,7 +25,7 @@
 .SH "NAME"
 memkind_pmem.h \- file-backed memory memkind operations.
 .br
-Note: This is EXEPRIMENTAL API. The functionality and the header file itself can be changed (including non-backward compatible changes), or remove.
+Note: This is EXEPRIMENTAL API. The functionality and the header file itself can be changed (including non-backward compatible changes) or remove.
 .SH "SYNOPSIS"
 .nf
 .B #include <memkind/internal/memkind_pmem.h>
@@ -52,7 +52,7 @@ library.  It uses the
 system call to create a pool of volatile memory.  Such memory may have different
 attributes, depending on the file system containing the memory-mapped files.
 (See also
-.IR http://pmem.io/nvml/libvmem ).
+.IR http://pmem.io/pmdk/libvmem ).
 .PP
 The pmem memkinds are most useful when used with
 .I Direct Access
@@ -99,10 +99,10 @@ See
 .BR mmap (2)
 for more information about these flags.
 .TP
-.B MEMKIND_PMEM_MIN_SIZE
-The minimum size of the file-backed memory partition.
+.B MEMKIND_PMEM_CHUNK_SIZE
+The size of the PMEM chunk size.
 .SH "COPYRIGHT"
-Copyright (C) 2015 - 2017 Intel Corporation. All rights reserved.
+Copyright (C) 2015 - 2018 Intel Corporation. All rights reserved.
 .SH "SEE ALSO"
 .BR memkind (3),
 .BR memkind_arena (3),

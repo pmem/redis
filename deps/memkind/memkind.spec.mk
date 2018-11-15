@@ -1,5 +1,5 @@
 #
-#  Copyright (C) 2014 - 2016 Intel Corporation.
+#  Copyright (C) 2014 - 2018 Intel Corporation.
 #  All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -169,6 +169,7 @@ rm -f %{buildroot}/%{_libdir}/libautohbw.{l,}a
 %{_includedir}
 %{_includedir}/hbwmalloc.h
 %{_includedir}/hbw_allocator.h
+%{_includedir}/pmem_allocator.h
 %{_libdir}/lib%{namespace}.so
 %{_libdir}/libautohbw.so
 %{_includedir}/%{namespace}.h
@@ -176,6 +177,7 @@ rm -f %{buildroot}/%{_libdir}/libautohbw.{l,}a
 %{_includedir}/%{internal_include}/%{namespace}*.h
 %{_mandir}/man3/hbwmalloc.3.*
 %{_mandir}/man3/hbwallocator.3.*
+%{_mandir}/man3/pmemallocator.3.*
 %{_mandir}/man3/%{namespace}*.3.*
 
 %exclude %{_includedir}/%{internal_include}/%{namespace}_log.h
@@ -185,6 +187,7 @@ rm -f %{buildroot}/%{_libdir}/libautohbw.{l,}a
 $(memkind_test_dir)/all_tests
 $(memkind_test_dir)/environ_err_hbw_malloc_test
 $(memkind_test_dir)/decorator_test
+$(memkind_test_dir)/locality_test
 $(memkind_test_dir)/freeing_memory_segfault_test
 $(memkind_test_dir)/gb_page_tests_bind_policy
 $(memkind_test_dir)/filter_memkind
@@ -193,7 +196,15 @@ $(memkind_test_dir)/hello_memkind
 $(memkind_test_dir)/hello_memkind_debug
 $(memkind_test_dir)/memkind_allocated
 $(memkind_test_dir)/autohbw_candidates
-${memkind_test_dir}/pmem
+${memkind_test_dir}/pmem_kinds
+${memkind_test_dir}/pmem_malloc
+${memkind_test_dir}/pmem_malloc_unlimited
+${memkind_test_dir}/pmem_usable_size
+${memkind_test_dir}/pmem_alignment
+${memkind_test_dir}/pmem_and_default_kind
+${memkind_test_dir}/pmem_multithreads
+${memkind_test_dir}/pmem_multithreads_onekind
+${memkind_test_dir}/pmem_cpp_allocator
 ${memkind_test_dir}/allocator_perf_tool_tests
 ${memkind_test_dir}/perf_tool
 ${memkind_test_dir}/autohbw_test_helper
@@ -204,19 +215,20 @@ $(memkind_test_dir)/memkind-slts.ts
 $(memkind_test_dir)/memkind-perf.ts
 $(memkind_test_dir)/memkind-perf-ext.ts
 $(memkind_test_dir)/memkind-pytests.ts
-$(memkind_test_dir)/check.sh
 $(memkind_test_dir)/test.sh
 $(memkind_test_dir)/hbw_detection_test.py
 $(memkind_test_dir)/autohbw_test.py
 $(memkind_test_dir)/trace_mechanism_test.py
 $(memkind_test_dir)/python_framework
 $(memkind_test_dir)/python_framework/cmd_helper.py
+$(memkind_test_dir)/python_framework/huge_page_organizer.py
 $(memkind_test_dir)/python_framework/__init__.py
 $(memkind_test_dir)/draw_plots.py
 $(memkind_test_dir)/run_alloc_benchmark.sh
 $(memkind_test_dir)/alloc_benchmark_hbw
 $(memkind_test_dir)/alloc_benchmark_glibc
 $(memkind_test_dir)/alloc_benchmark_tbb
+$(memkind_test_dir)/alloc_benchmark_pmem
 
 %exclude $(memkind_test_dir)/*.pyo
 %exclude $(memkind_test_dir)/*.pyc

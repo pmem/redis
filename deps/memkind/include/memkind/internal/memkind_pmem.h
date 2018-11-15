@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 - 2017 Intel Corporation.
+ * Copyright (C) 2015 - 2018 Intel Corporation.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,20 +45,16 @@ extern "C" {
  * API standards are described in memkind(3) man page.
  */
 
-#define	MEMKIND_PMEM_MIN_SIZE (1024 * 1024 * 16)
+#define MEMKIND_PMEM_CHUNK_SIZE (1ull << 21ull) // 2MB
 
-int memkind_pmem_create(struct memkind *kind, struct memkind_ops *ops, const char *name);
+int memkind_pmem_create(struct memkind *kind, struct memkind_ops *ops,
+                        const char *name);
 int memkind_pmem_destroy(struct memkind *kind);
 void *memkind_pmem_mmap(struct memkind *kind, void *addr, size_t size);
 int memkind_pmem_get_mmap_flags(struct memkind *kind, int *flags);
-int memkind_pmem_get_size(struct memkind *kind, size_t *total, size_t *free);
-int jemk_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
-int jemk_mallctl(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
-void jemk_dallocx(void *ptr, int flags);
 
 struct memkind_pmem {
     int fd;
-    void *addr;
     off_t offset;
     size_t max_size;
     pthread_mutex_t pmem_lock;

@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2015 - 2016 Intel Corporation.
+* Copyright (C) 2015 - 2018 Intel Corporation.
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -28,7 +28,6 @@
 #include <assert.h>
 
 #include "Task.hpp"
-#include "FootprintTask.h"
 #include "FunctionCallsPerformanceTask.h"
 #include "Configuration.hpp"
 
@@ -37,42 +36,23 @@ class TaskFactory
 {
 public:
 
-	enum {FOOTPRINT_TASK, FUNCTION_CALLS_PERFORMANCE_TASK};
+    Task* create(TaskConf conf)
+    {
+        Task* task = NULL;
+        task = new FunctionCallsPerformanceTask(conf);
 
-	Task* create(unsigned type, TaskConf conf)
-	{
-		Task* task = NULL;
+        tasks.push_back(task);
 
-		switch(type)
-		{
-			case FOOTPRINT_TASK:
-					{
-						task = new FootprintTask(conf);
-						break;
-					}
-			case FUNCTION_CALLS_PERFORMANCE_TASK:
-					{
-						task = new FunctionCallsPerformanceTask(conf);
-						break;
-					}
+        return task;
+    }
 
-			default:
-				assert(!"'type' out of range!");
-		}
-
-		tasks.push_back(task);
-
-		return task;
-	}
-
-	~TaskFactory()
-	{
-		for (int i=0; i<tasks.size(); i++)
-		{
-			delete tasks[i];
-		}
-	}
+    ~TaskFactory()
+    {
+        for (int i=0; i<tasks.size(); i++) {
+            delete tasks[i];
+        }
+    }
 
 private:
-	std::vector<Task*> tasks;
+    std::vector<Task*> tasks;
 };

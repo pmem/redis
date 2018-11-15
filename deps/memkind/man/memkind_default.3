@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (C) 2014 - 2017 Intel Corporation.
+.\" Copyright (C) 2014 - 2018 Intel Corporation.
 .\" All rights reserved.
 .\"
 .\" Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,8 @@ Note: This is EXEPRIMENTAL API. The functionality and the header file itself can
 .br
 .BI "int memkind_default_get_mbind_mode(struct memkind " "*kind" ", int " "*mode" );
 .br
+.BI "size_t memkind_default_malloc_usable_size(struct memkind " "*kind" ", void " "*ptr" );
+.br
 .BI "int memkind_preferred_get_mbind_mode(struct memkind " "*kind" ", int " "*mode" );
 .br
 .BI "int memkind_interleave_get_mbind_mode(struct memkind " "*kind" ", int " "*mode" );
@@ -61,6 +63,12 @@ Note: This is EXEPRIMENTAL API. The functionality and the header file itself can
 .BI "int memkind_nohugepage_madvise(struct memkind " "*kind" ", void " "*addr" ", size_t " "size" );
 .br
 .BI "int memkind_posix_check_alignment(struct memkind " "*kind" ", size_t " "alignment" );
+.br
+.BI "int memkind_default_get_mbind_nodemask(struct memkind " "*kind" ", unsigned long " "*nodemask" ", unsigned long " "maxnode" );
+.br
+.BI "void memkind_default_init_once(void);"
+.br
+.BI "bool size_out_of_bounds(size_t " "size" );
 .br
 .SH DESCRIPTION
 .PP
@@ -70,7 +78,7 @@ useful methods that are not part of the
 kind which is a fall through to the jemalloc implementation.
 .PP
 .BR memkind_default_create ()
-implements the required start up for every kind.  If a kind does not
+implements the required start up for every kind. If a kind does not
 point to this function directly for its
 .BR ops.create ()
 operation, then the function that it points to must call
@@ -78,7 +86,7 @@ operation, then the function that it points to must call
 at its start.
 .PP
 .BR memkind_default_destroy ()
-implements the required shutdown for every kind.  If a kind does not
+implements the required shutdown for every kind. If a kind does not
 point to this function directly for its
 .BR ops.destroy ()
 operation, then the function that it points to must call
@@ -86,23 +94,23 @@ operation, then the function that it points to must call
 at its end.
 .PP
 .BR memkind_default_malloc ()
-is a direct call through to jemalloc's
+is a direct call through the jemalloc's
 .BR malloc ().
 .PP
 .BR memkind_default_calloc ()
-is a direct call through to jemalloc's
+is a direct call through the jemalloc's
 .BR calloc ().
 .PP
 .BR memkind_default_posix_memalign ()
-is a direct call through to jemalloc's
+is a direct call through the jemalloc's
 .BR posix_memalign ().
 .PP
 .BR memkind_default_realloc ()
-is a direct call through to jemalloc's
+is a direct call through the jemalloc's
 .BR realloc ().
 .PP
 .BR memkind_default_free ().
-is a direct call through to jemalloc's
+is a direct call through the jemalloc's
 .BR free ().
 Note that this method can be called on any pointer returned by a
 jemalloc allocation, and in particular, all of the arena
@@ -157,6 +165,10 @@ See
 .BR mbind (2)
 for more information about this flag.
 .PP
+.BR memkind_default_malloc_usable_size ()
+is a direct call through the jemalloc's
+.BR malloc_usable_size ().
+.PP
 .BR memkind_preferred_get_mbind_mode ()
 sets
 .I mode
@@ -190,9 +202,20 @@ can be used to check the alignment value for
 .BR memkind_posix_memalign ()
 to ensure that is abides by the POSIX requirements:
 alignment must be a power of 2 at least as large as
-.RB sizeof( "void *" ).
+.BR sizeof( "void *" ).
+.PP
+.BR memkind_default_get_mbind_nodemask ()
+wraps jemalloc's
+.BR copy_bitmask_to_bitmask.
+This function copies body of the bitmask structure into passed pointer.
+.PP
+.BR memkind_default_init_once ()
+initializes heap manager.
+.PP
+.BR size_out_of_bounds ()
+returns true if given size is out of bounds, otherwise will return false.
 .SH "COPYRIGHT"
-Copyright (C) 2014 - 2017 Intel Corporation. All rights reserved.
+Copyright (C) 2014 - 2018 Intel Corporation. All rights reserved.
 .SH "SEE ALSO"
 .BR memkind (3),
 .BR memkind_arena (3),

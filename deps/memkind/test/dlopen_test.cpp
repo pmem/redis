@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Intel Corporation.
+ * Copyright (C) 2017 - 2018 Intel Corporation.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -21,6 +21,8 @@
  * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+#include "allocator_perf_tool/HugePageOrganizer.hpp"
+
 #include <dlfcn.h>
 
 #include "common.h"
@@ -31,8 +33,7 @@ protected:
     DlopenTest()
     {
         const char *path = "/usr/lib64/libmemkind.so";
-        if (!pathExists(path))
-        {
+        if (!pathExists(path)) {
             path = "/usr/lib/libmemkind.so";
         }
         dlerror();
@@ -66,8 +67,7 @@ protected:
     bool pathExists(const char *p)
     {
         struct stat info;
-        if (0 != stat(p, &info))
-        {
+        if (0 != stat(p, &info)) {
             return false;
         }
         return true;
@@ -93,6 +93,7 @@ TEST_F(DlopenTest, test_TC_MEMKIND_HBW_4194305_bytes)
 
 TEST_F(DlopenTest, test_TC_MEMKIND_HBW_HUGETLB_4194305_bytes)
 {
+    HugePageOrganizer huge_page_organizer(8);
     test("MEMKIND_HBW_HUGETLB", 4194305);
 }
 

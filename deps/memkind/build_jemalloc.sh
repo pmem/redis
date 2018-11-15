@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-#  Copyright (C) 2016 Intel Corporation.
+#  Copyright (C) 2016 - 2018 Intel Corporation.
 #  All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -28,10 +28,8 @@ cd jemalloc
 test -e configure || autoconf
 test -e obj || mkdir obj
 cd obj
-#../configure --enable-autogen --with-jemalloc-prefix=$JE_PREFIX --without-export \
-#             --disable-stats --disable-fill --disable-valgrind \
-#             $EXTRA_CONF --with-malloc-conf="lg_chunk:22,narenas:256,lg_tcache_max:12"
-../configure --with-jemalloc-prefix=$JE_PREFIX --enable-autogen --with-version=4.5.0-0-g0 --with-private-namespace=mk_ \
-	     $EXTRA_CONF --with-malloc-conf="lg_chunk:22,narenas:256,lg_tcache_max:12"
+../configure --enable-autogen --with-jemalloc-prefix=$JE_PREFIX --without-export \
+             --disable-stats --disable-fill \
+             $EXTRA_CONF --with-malloc-conf="narenas:256,lg_tcache_max:12"
 
 make -j`nproc`

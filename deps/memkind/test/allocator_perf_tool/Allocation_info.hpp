@@ -1,5 +1,5 @@
 /*
-* Copyright (C) 2015 - 2016 Intel Corporation.
+* Copyright (C) 2015 - 2018 Intel Corporation.
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -23,22 +23,22 @@
 */
 #pragma once
 
-#include <stdlib.h>
-#include <numaif.h>
+#include <stdint.h>
+#include <stddef.h>
+
 
 
 //This structure is responsible to store information about single memory operation.
-struct memory_operation
-{
-	void* ptr;
-	double total_time;
-	size_t size_of_allocation;
-	unsigned allocator_type;
-	unsigned allocation_method;
-	bool is_allocated;
-	int error_code;
+struct memory_operation {
+    void* ptr;
+    double total_time;
+    size_t size_of_allocation;
+    unsigned allocator_type;
+    unsigned allocation_method;
+    bool is_allocated;
+    int error_code;
 };
 
-float convert_bytes_to_mb(size_t bytes);
+double convert_bytes_to_mb(uint64_t bytes);
 
 int get_numa_node_id(void* ptr);
