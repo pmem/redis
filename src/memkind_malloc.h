@@ -1,5 +1,5 @@
 size_t jemk_malloc_usable_size(void *ptr);
-int jemk_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
+int mk_je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
 int jemk_mallctl(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 void jemk_dallocx(void *ptr, int flags);
 
@@ -17,7 +17,7 @@ void *pmem_memset_wrapper(void *pmemdest, int c, size_t len);
 #define mrealloc memkind_realloc_wrapper
 #define mfree memkind_free_wrapper
 #define mmalloc_usable_size jemk_malloc_usable_size
-#define mget_defrag_hint jemk_get_defrag_hint
+#define mget_defrag_hint mk_je_get_defrag_hint
 #define mfree_no_tcache memkind_free_no_tcache_wrapper
 #define mmemcpy pmem_memcpy_wrapper
 #define mmemset pmem_memset_wrapper
