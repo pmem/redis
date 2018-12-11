@@ -1919,7 +1919,7 @@ int zuiNext(zsetopsrc *op, zsetopval *val, alloc a) {
     if (val->flags & OPVAL_DIRTY_SDS)
         sdsfreeA(val->ele, a);
 
-    memset(val,0,sizeof(zsetopval));
+    a->memset(val,0,sizeof(zsetopval));
 
     if (op->type == OBJ_SET) {
         iterset *it = &op->iter.set;
@@ -2224,7 +2224,7 @@ void zunionInterGenericCommand(client *c, robj *dstkey, int op) {
 
     dstobj = createZsetObject();
     dstzset = dstobj->ptr;
-    memset(&zval, 0, sizeof(zval));
+    dstobj->a->memset(&zval, 0, sizeof(zval));
 
     if (op == SET_OP_INTER) {
         /* Skip everything if the smallest input is empty. */

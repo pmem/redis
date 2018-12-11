@@ -843,7 +843,7 @@ unsigned char *__ziplistInsertA(unsigned char *zl, unsigned char *p, unsigned ch
     p += zipStorePrevEntryLength(p,prevlen);
     p += zipStoreEntryEncoding(p,encoding,slen);
     if (ZIP_IS_STR(encoding)) {
-        memcpy(p,s,slen);
+        a->memcpy(p,s,slen);
     } else {
         zipSaveInteger(p,value,encoding);
     }
@@ -922,7 +922,7 @@ unsigned char *ziplistMergeA(unsigned char **first, unsigned char **second, allo
         /* append == appending to target */
         /* Copy source after target (copying over original [END]):
          *   [TARGET - END, SOURCE - HEADER] */
-        memcpy(target + target_bytes - ZIPLIST_END_SIZE,
+        a->memcpy(target + target_bytes - ZIPLIST_END_SIZE,
                source + ZIPLIST_HEADER_SIZE,
                source_bytes - ZIPLIST_HEADER_SIZE);
     } else {
@@ -933,7 +933,7 @@ unsigned char *ziplistMergeA(unsigned char **first, unsigned char **second, allo
         memmove(target + source_bytes - ZIPLIST_END_SIZE,
                 target + ZIPLIST_HEADER_SIZE,
                 target_bytes - ZIPLIST_HEADER_SIZE);
-        memcpy(target, source, source_bytes - ZIPLIST_END_SIZE);
+        a->memcpy(target, source, source_bytes - ZIPLIST_END_SIZE);
     }
 
     /* Update header metadata. */

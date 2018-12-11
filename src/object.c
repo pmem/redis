@@ -104,10 +104,10 @@ robj *createEmbeddedStringObjectA(const char *ptr, size_t len, alloc a) {
     sh->alloc = len;
     sh->flags = SDS_TYPE_8;
     if (ptr) {
-        memcpy(sh->buf,ptr,len);
+        a->memcpy(sh->buf,ptr,len);
         sh->buf[len] = '\0';
     } else {
-        memset(sh->buf,0,len+1);
+        a->memset(sh->buf,0,len+1);
     }
     return o;
 }

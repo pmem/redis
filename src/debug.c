@@ -480,7 +480,7 @@ void debugCommand(client *c) {
             else {
                 int buflen = strlen(buf);
                 val = createStringObjectM(NULL,valsize);
-                memcpy(val->ptr, buf, valsize<=buflen? valsize: buflen);
+                val->a->memcpy(val->ptr, buf, valsize<=buflen? valsize: buflen);
             }
             dbAdd(c->db,key,val);
             signalModifiedKey(c->db,key);
