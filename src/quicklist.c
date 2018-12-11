@@ -840,7 +840,7 @@ REDIS_STATIC quicklistNode *_quicklistSplitNodeA(quicklistNode *node, int offset
     new_node->zl = a->alloc(zl_sz);
 
     /* Copy original ziplist so we can split it */
-    memcpy(new_node->zl, node->zl, zl_sz);
+    a->memcpy(new_node->zl, node->zl, zl_sz);
 
     /* -1 here means "continue deleting until the list ends" */
     int orig_start = after ? offset + 1 : 0;

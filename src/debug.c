@@ -139,9 +139,9 @@ void computeDatasetDigest(unsigned char *final) {
             robj *keyobj, *o;
             long long expiretime;
 
-            memset(digest,0,20); /* This key-val digest */
             key = dictGetKey(de);
             keyobj = createStringObject(key,sdslen(key));
+			keyobj->a->memset(digest, 0, 20); /* This key-val digest */
 
             mixDigest(digest,key,sdslen(key));
 
@@ -191,7 +191,7 @@ void computeDatasetDigest(unsigned char *final) {
                         serverAssert(ziplistGet(eptr,&vstr,&vlen,&vll));
                         score = zzlGetScore(sptr);
 
-                        memset(eledigest,0,20);
+                        o->a->memset(eledigest,0,20);
                         if (vstr != NULL) {
                             mixDigest(eledigest,vstr,vlen);
                         } else {
@@ -214,7 +214,7 @@ void computeDatasetDigest(unsigned char *final) {
                         double *score = dictGetVal(de);
 
                         snprintf(buf,sizeof(buf),"%.17g",*score);
-                        memset(eledigest,0,20);
+                        o->a->memset(eledigest,0,20);
                         mixDigest(eledigest,sdsele,sdslen(sdsele));
                         mixDigest(eledigest,buf,strlen(buf));
                         xorDigest(digest,eledigest,20);
@@ -229,7 +229,7 @@ void computeDatasetDigest(unsigned char *final) {
                     unsigned char eledigest[20];
                     sds sdsele;
 
-                    memset(eledigest,0,20);
+                    o->a->memset(eledigest,0,20);
                     sdsele = hashTypeCurrentObjectNewSds(hi,OBJ_HASH_KEY);
                     mixDigest(eledigest,sdsele,sdslen(sdsele));
                     sdsfree(sdsele);
@@ -480,7 +480,7 @@ void debugCommand(client *c) {
             else {
                 int buflen = strlen(buf);
                 val = createStringObjectM(NULL,valsize);
-                memcpy(val->ptr, buf, valsize<=buflen? valsize: buflen);
+                val->a->memcpy(val->ptr, buf, valsize<=buflen? valsize: buflen);
             }
             dbAdd(c->db,key,val);
             signalModifiedKey(c->db,key);

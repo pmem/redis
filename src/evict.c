@@ -172,7 +172,7 @@ void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evic
 
         de = samples[j];
         key = dictGetKey(de);
-
+		
         /* If the dictionary we are sampling from is not the main
          * dictionary (but the expires one) we need to lookup the key
          * again in the key dictionary to obtain the value object. */

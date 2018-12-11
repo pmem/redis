@@ -2490,8 +2490,8 @@ void clusterSendPublish(clusterLink *link, robj *channel, robj *message) {
         memcpy(payload,hdr,sizeof(*hdr));
         hdr = (clusterMsg*) payload;
     }
-    memcpy(hdr->data.publish.msg.bulk_data,channel->ptr,sdslen(channel->ptr));
-    memcpy(hdr->data.publish.msg.bulk_data+sdslen(channel->ptr),
+    channel->a->memcpy(hdr->data.publish.msg.bulk_data,channel->ptr,sdslen(channel->ptr));
+	channel->a->memcpy(hdr->data.publish.msg.bulk_data + sdslen(channel->ptr),
         message->ptr,sdslen(message->ptr));
 
     if (link)

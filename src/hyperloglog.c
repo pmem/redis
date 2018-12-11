@@ -828,7 +828,7 @@ int hllSparseSet(robj *o, long index, uint8_t count) {
          sdslen(o->ptr)+deltalen > server.hll_sparse_max_bytes) goto promote;
      if (deltalen && next) memmove(next+deltalen,next,end-next);
      sdsIncrLen(o->ptr,deltalen);
-     memcpy(p,seq,seqlen);
+     o->a->memcpy(p,seq,seqlen);
      end += deltalen;
 
 updated:
@@ -1124,7 +1124,7 @@ robj *createHLLObject(void) {
     /* Create the actual object. */
     o = createObject(OBJ_STRING,s);
     hdr = o->ptr;
-    memcpy(hdr->magic,"HYLL",4);
+    o->a->memcpy(hdr->magic,"HYLL",4);
     hdr->encoding = HLL_SPARSE;
     return o;
 }
@@ -1417,8 +1417,8 @@ void pfselftestCommand(client *c) {
      *
      * The test is performed with both dense and sparse HLLs at the same
      * time also verifying that the computed cardinality is the same. */
-    memset(hdr->registers,0,HLL_DENSE_SIZE-HLL_HDR_SIZE);
     o = createHLLObject();
+	o->a->memset(hdr->registers, 0, HLL_DENSE_SIZE - HLL_HDR_SIZE);
     double relerr = 1.04/sqrt(HLL_REGISTERS);
     int64_t checkpoint = 1;
     uint64_t seed = (uint64_t)rand() | (uint64_t)rand() << 32;

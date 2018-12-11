@@ -75,7 +75,7 @@ void* activeDefragAllocA(void *ptr, alloc a) {
      * pointers we try to free */
     size = a->alloc_size(ptr);
     newptr = a->alloc_no_tcache(size);
-    memcpy(newptr, ptr, size);
+    a->memcpy(newptr, ptr, size);
     a->free_no_tcache(ptr);
     return newptr;
 }

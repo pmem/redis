@@ -417,7 +417,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             sds s = cached_objects[j]->ptr;
             argv[j] = cached_objects[j];
             cached_objects[j] = NULL;
-            memcpy(s,obj_s,obj_len+1);
+            argv[j]->a->memcpy(s,obj_s,obj_len+1);
             sdssetlen(s, obj_len);
         } else {
             argv[j] = createStringObject(obj_s, obj_len);

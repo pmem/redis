@@ -100,9 +100,9 @@ robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst) {
     postfixlen = sdslen(spat)-(prefixlen+1)-(fieldlen ? fieldlen+2 : 0);
     keyobj = createStringObject(NULL,prefixlen+sublen+postfixlen);
     k = keyobj->ptr;
-    memcpy(k,spat,prefixlen);
-    memcpy(k+prefixlen,ssub,sublen);
-    memcpy(k+prefixlen+sublen,p+1,postfixlen);
+    subst->a->memcpy(k,spat,prefixlen);
+	subst->a->memcpy(k+prefixlen,ssub,sublen);
+	subst->a->memcpy(k+prefixlen+sublen,p+1,postfixlen);
     decrRefCount(subst); /* Incremented by decodeObject() */
 
     /* Lookup substituted key */

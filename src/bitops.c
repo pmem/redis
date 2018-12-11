@@ -677,8 +677,8 @@ void bitopCommand(client *c) {
             unsigned long *lres = (unsigned long*) res;
 
             /* Note: sds pointer is always aligned to 8 byte boundary. */
-            memcpy(lp,src,sizeof(unsigned long*)*numkeys);
-            memcpy(res,src[0],minlen);
+            o->a->memcpy(lp,src,sizeof(unsigned long*)*numkeys);
+            o->a->memcpy(res,src[0],minlen);
 
             /* Different branches per different operations for speed (sorry). */
             if (op == BITOP_AND) {
@@ -1101,7 +1101,7 @@ void bitfieldCommand(client *c) {
              * copy up to 9 bytes to a local buffer, so that we can easily
              * execute up to 64 bit operations that are at actual string
              * object boundaries. */
-            memset(buf,0,9);
+            o->a->memset(buf,0,9);
             int i;
             size_t byte = thisop->offset >> 3;
             for (i = 0; i < 9; i++) {
