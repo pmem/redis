@@ -139,7 +139,7 @@ void computeDatasetDigest(unsigned char *final) {
             robj *keyobj, *o;
             long long expiretime;
 
-            memset(digest,0,20); /* This key-val digest */
+            memset(digest, 0, 20); /* This key-val digest */
             key = dictGetKey(de);
             keyobj = createStringObject(key,sdslen(key));
 
@@ -229,7 +229,7 @@ void computeDatasetDigest(unsigned char *final) {
                     unsigned char eledigest[20];
                     sds sdsele;
 
-                    memset(eledigest,0,20);
+                    o->a->memset(eledigest,0,20);
                     sdsele = hashTypeCurrentObjectNewSds(hi,OBJ_HASH_KEY);
                     mixDigest(eledigest,sdsele,sdslen(sdsele));
                     sdsfree(sdsele);
@@ -480,7 +480,7 @@ void debugCommand(client *c) {
             else {
                 int buflen = strlen(buf);
                 val = createStringObjectM(NULL,valsize);
-                memcpy(val->ptr, buf, valsize<=buflen? valsize: buflen);
+                val->a->memcpy(val->ptr, buf, valsize<=buflen? valsize: buflen);
             }
             dbAdd(c->db,key,val);
             signalModifiedKey(c->db,key);
