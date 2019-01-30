@@ -1483,7 +1483,7 @@ void initServerConfig(void) {
 
     server.pm_dir_path = NULL;
     server.pm_file_size = 1024 * 1024 * 16;
-    server.use_volatile = true;
+    server.use_volatile = false;
     server.keys_on_pm = true;
 
     unsigned int lruclock = getLRUClock();

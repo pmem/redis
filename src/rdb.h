@@ -135,7 +135,9 @@ void rdbRemoveTempFile(pid_t childpid);
 int rdbSave(char *filename, rdbSaveInfo *rsi);
 ssize_t rdbSaveObject(rio *rdb, robj *o);
 size_t rdbSavedObjectLen(robj *o);
-robj *rdbLoadObject(int type, rio *rdb);
+robj *rdbLoadObjectA(int type, rio *rdb, alloc a);
+static inline robj *rdbLoadObject(int type, rio *rdb) { return rdbLoadObjectA(type,rdb,z_alloc); }
+static inline robj *rdbLoadObjectM(int type, rio *rdb) { return rdbLoadObjectA(type,rdb,m_alloc); }
 void backgroundSaveDoneHandler(int exitcode, int bysignal);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, long long now);
 robj *rdbLoadStringObject(rio *rdb);
