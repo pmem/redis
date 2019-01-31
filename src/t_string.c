@@ -135,22 +135,22 @@ void setCommand(client *c) {
         }
     }
 
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    c->argv[2] = tryObjectEncodingM(c->argv[2]);
     setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
 }
 
 void setnxCommand(client *c) {
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    c->argv[2] = tryObjectEncodingM(c->argv[2]);
     setGenericCommand(c,OBJ_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);
 }
 
 void setexCommand(client *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    c->argv[3] = tryObjectEncodingM(c->argv[3]);
     setGenericCommand(c,OBJ_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);
 }
 
 void psetexCommand(client *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    c->argv[3] = tryObjectEncodingM(c->argv[3]);
     setGenericCommand(c,OBJ_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
 }
 
@@ -175,7 +175,7 @@ void getCommand(client *c) {
 
 void getsetCommand(client *c) {
     if (getGenericCommand(c) == C_ERR) return;
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
+    c->argv[2] = tryObjectEncodingM(c->argv[2]);
     setKey(c->db,c->argv[1],c->argv[2]);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[1],c->db->id);
     server.dirty++;
@@ -206,7 +206,8 @@ void setrangeCommand(client *c) {
         if (checkStringLength(c,offset+sdslen(value)) != C_OK)
             return;
 
-        o = createObject(OBJ_STRING,sdsnewlen(NULL, offset+sdslen(value)));
+        o = createObject(OBJ_STRING,sdsnewlenM(NULL, offset+sdslen(value)));
+        o->a = m_alloc;
         dbAdd(c->db,c->argv[1],o);
     } else {
         size_t olen;
@@ -227,11 +228,11 @@ void setrangeCommand(client *c) {
             return;
 
         /* Create a copy when the object is shared or encoded. */
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
+        o = dbUnshareStringValueM(c->db,c->argv[1],o);
     }
 
     if (sdslen(value) > 0) {
-        o->ptr = sdsgrowzero(o->ptr,offset+sdslen(value));
+        o->ptr = sdsgrowzeroM(o->ptr,offset+sdslen(value));
         memcpy((char*)o->ptr+offset,value,sdslen(value));
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,
@@ -320,7 +321,7 @@ void msetGenericCommand(client *c, int nx) {
     }
 
     for (j = 1; j < c->argc; j += 2) {
-        c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
+        c->argv[j+1] = tryObjectEncodingM(c->argv[j+1]);
         setKey(c->db,c->argv[j],c->argv[j+1]);
         notifyKeyspaceEvent(NOTIFY_STRING,"set",c->argv[j],c->db->id);
     }
@@ -359,7 +360,7 @@ void incrDecrCommand(client *c, long long incr) {
         new = o;
         o->ptr = (void*)((long)value);
     } else {
-        new = createStringObjectFromLongLongForValue(value);
+        new = createStringObjectFromLongLongForValueM(value);
         if (o) {
             dbOverwrite(c->db,c->argv[1],new);
         } else {
@@ -411,7 +412,7 @@ void incrbyfloatCommand(client *c) {
         addReplyError(c,"increment would produce NaN or Infinity");
         return;
     }
-    new = createStringObjectFromLongDouble(value,1);
+    new = createStringObjectFromLongDoubleM(value,1);
     if (o)
         dbOverwrite(c->db,c->argv[1],new);
     else
@@ -437,7 +438,7 @@ void appendCommand(client *c) {
     o = lookupKeyWrite(c->db,c->argv[1]);
     if (o == NULL) {
         /* Create the key */
-        c->argv[2] = tryObjectEncoding(c->argv[2]);
+        c->argv[2] = tryObjectEncodingM(c->argv[2]);
         dbAdd(c->db,c->argv[1],c->argv[2]);
         incrRefCount(c->argv[2]);
         totlen = stringObjectLen(c->argv[2]);
@@ -453,8 +454,8 @@ void appendCommand(client *c) {
             return;
 
         /* Append the value */
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
-        o->ptr = sdscatlen(o->ptr,append->ptr,sdslen(append->ptr));
+        o = dbUnshareStringValueM(c->db,c->argv[1],o);
+        o->ptr = sdscatlenM(o->ptr,append->ptr,sdslen(append->ptr));
         totlen = sdslen(o->ptr);
     }
     signalModifiedKey(c->db,c->argv[1]);

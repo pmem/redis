@@ -38,13 +38,13 @@
 
 /* ===================== Creation and parsing of objects ==================== */
 
-robj *createObject(int type, void *ptr) {
-    robj *o = zmalloc(sizeof(*o));
+robj *createObjectA(int type, void *ptr, alloc a) {
+    robj *o = a->alloc(sizeof(robj));
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->ptr = ptr;
     o->refcount = 1;
-
+    o->a = a;
     /* Set the LRU to the current lruclock (minutes resolution), or
      * alternatively the LFU counter. */
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
@@ -74,21 +74,24 @@ robj *makeObjectShared(robj *o) {
 
 /* Create a string object with encoding OBJ_ENCODING_RAW, that is a plain
  * string object where o->ptr points to a proper sds string. */
-robj *createRawStringObject(const char *ptr, size_t len) {
-    return createObject(OBJ_STRING, sdsnewlen(ptr,len));
+robj *createRawStringObjectA(const char *ptr, size_t len, alloc a) {
+    robj *o = createObject(OBJ_STRING, sdsnewlenA(ptr,len, a));
+    o->a = a;
+    return o;
 }
 
 /* Create a string object with encoding OBJ_ENCODING_EMBSTR, that is
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
-robj *createEmbeddedStringObject(const char *ptr, size_t len) {
-    robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1);
+robj *createEmbeddedStringObjectA(const char *ptr, size_t len, alloc a) {
+    robj *o = a->alloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1);
     struct sdshdr8 *sh = (void*)(o+1);
 
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
     o->ptr = sh+1;
     o->refcount = 1;
+    o->a = a;
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
     } else {
@@ -116,11 +119,11 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
  * The current limit of 44 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
 #define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 44
-robj *createStringObject(const char *ptr, size_t len) {
+robj *createStringObjectA(const char *ptr, size_t len, alloc a) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
-        return createEmbeddedStringObject(ptr,len);
+        return createEmbeddedStringObjectA(ptr,len,a);
     else
-        return createRawStringObject(ptr,len);
+        return createRawStringObjectA(ptr,len,a);
 }
 
 /* Create a string object from a long long value. When possible returns a
@@ -130,7 +133,7 @@ robj *createStringObject(const char *ptr, size_t len) {
  * integer, because the object is going to be used as value in the Redis key
  * space (for instance when the INCR command is used), so we want LFU/LRU
  * values specific for each key. */
-robj *createStringObjectFromLongLongWithOptions(long long value, int valueobj) {
+robj *createStringObjectFromLongLongWithOptionsA(long long value, int valueobj, alloc a) {
     robj *o;
 
     if (server.maxmemory == 0 ||
@@ -146,28 +149,29 @@ robj *createStringObjectFromLongLongWithOptions(long long value, int valueobj) {
         o = shared.integers[value];
     } else {
         if (value >= LONG_MIN && value <= LONG_MAX) {
-            o = createObject(OBJ_STRING, NULL);
+            o = createObjectA(OBJ_STRING,NULL,a);
             o->encoding = OBJ_ENCODING_INT;
             o->ptr = (void*)((long)value);
         } else {
-            o = createObject(OBJ_STRING,sdsfromlonglong(value));
+            o = createObject(OBJ_STRING,sdsfromlonglongA(value, a));
         }
+        o->a = a;
     }
     return o;
 }
 
 /* Wrapper for createStringObjectFromLongLongWithOptions() always demanding
  * to create a shared object if possible. */
-robj *createStringObjectFromLongLong(long long value) {
-    return createStringObjectFromLongLongWithOptions(value,0);
+robj *createStringObjectFromLongLongA(long long value, alloc a) {
+    return createStringObjectFromLongLongWithOptionsA(value,0,a);
 }
 
 /* Wrapper for createStringObjectFromLongLongWithOptions() avoiding a shared
  * object when LFU/LRU info are needed, that is, when the object is used
  * as a value in the key space, and Redis is configured to evict based on
  * LFU/LRU. */
-robj *createStringObjectFromLongLongForValue(long long value) {
-    return createStringObjectFromLongLongWithOptions(value,1);
+robj *createStringObjectFromLongLongForValueA(long long value, alloc a) {
+    return createStringObjectFromLongLongWithOptionsA(value,1,a);
 }
 
 /* Create a string object from a long double. If humanfriendly is non-zero
@@ -176,10 +180,10 @@ robj *createStringObjectFromLongLongForValue(long long value) {
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
-robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
+robj *createStringObjectFromLongDoubleA(long double value, int humanfriendly, alloc a) {
     char buf[MAX_LONG_DOUBLE_CHARS];
     int len = ld2string(buf,sizeof(buf),value,humanfriendly);
-    return createStringObject(buf,len);
+    return createStringObjectA(buf,len,a);
 }
 
 /* Duplicate a string object, with the guarantee that the returned object
@@ -211,10 +215,11 @@ robj *dupStringObject(const robj *o) {
     }
 }
 
-robj *createQuicklistObject(void) {
-    quicklist *l = quicklistCreate();
+robj *createQuicklistObjectA(alloc a) {
+    quicklist *l = quicklistCreateA(a);
     robj *o = createObject(OBJ_LIST,l);
     o->encoding = OBJ_ENCODING_QUICKLIST;
+    o->a = a;
     return o;
 }
 
@@ -225,42 +230,47 @@ robj *createZiplistObject(void) {
     return o;
 }
 
-robj *createSetObject(void) {
-    dict *d = dictCreate(&setDictType,NULL);
+robj *createSetObjectA(alloc a) {
+    dict *d = dictCreate((!allocCompare(a,z_alloc) ? &setDictTypeZ : &setDictTypeM),NULL);
     robj *o = createObject(OBJ_SET,d);
     o->encoding = OBJ_ENCODING_HT;
+    o->a = a;
     return o;
 }
 
-robj *createIntsetObject(void) {
-    intset *is = intsetNew();
+robj *createIntsetObjectA(alloc a) {
+    intset *is = intsetNewA(a);
     robj *o = createObject(OBJ_SET,is);
     o->encoding = OBJ_ENCODING_INTSET;
+    o->a = a;
     return o;
 }
 
-robj *createHashObject(void) {
-    unsigned char *zl = ziplistNew();
+robj *createHashObjectA(alloc a) {
+    unsigned char *zl = ziplistNewA(a);
     robj *o = createObject(OBJ_HASH, zl);
+    o->a = a;
     o->encoding = OBJ_ENCODING_ZIPLIST;
     return o;
 }
 
-robj *createZsetObject(void) {
+robj *createZsetObjectA(alloc a) {
     zset *zs = zmalloc(sizeof(*zs));
     robj *o;
 
     zs->dict = dictCreate(&zsetDictType,NULL);
     zs->zsl = zslCreate();
     o = createObject(OBJ_ZSET,zs);
+    o->a = a;
     o->encoding = OBJ_ENCODING_SKIPLIST;
     return o;
 }
 
-robj *createZsetZiplistObject(void) {
-    unsigned char *zl = ziplistNew();
+robj *createZsetZiplistObjectA(alloc a) {
+    unsigned char *zl = ziplistNewA(a);
     robj *o = createObject(OBJ_ZSET,zl);
     o->encoding = OBJ_ENCODING_ZIPLIST;
+    o->a = a;
     return o;
 }
 
@@ -280,13 +290,13 @@ robj *createModuleObject(moduleType *mt, void *value) {
 
 void freeStringObject(robj *o) {
     if (o->encoding == OBJ_ENCODING_RAW) {
-        sdsfree(o->ptr);
+        sdsfreeA(o->ptr, o->a);
     }
 }
 
 void freeListObject(robj *o) {
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
-        quicklistRelease(o->ptr);
+        quicklistReleaseA(o->ptr, o->a);
     } else {
         serverPanic("Unknown list encoding type");
     }
@@ -298,7 +308,7 @@ void freeSetObject(robj *o) {
         dictRelease((dict*) o->ptr);
         break;
     case OBJ_ENCODING_INTSET:
-        zfree(o->ptr);
+        o->a->free(o->ptr);
         break;
     default:
         serverPanic("Unknown set encoding type");
@@ -311,11 +321,11 @@ void freeZsetObject(robj *o) {
     case OBJ_ENCODING_SKIPLIST:
         zs = o->ptr;
         dictRelease(zs->dict);
-        zslFree(zs->zsl);
+        zslFree(zs->zsl, o->a);
         zfree(zs);
         break;
     case OBJ_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        o->a->free(o->ptr);
         break;
     default:
         serverPanic("Unknown sorted set encoding");
@@ -328,7 +338,7 @@ void freeHashObject(robj *o) {
         dictRelease((dict*) o->ptr);
         break;
     case OBJ_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        o->a->free(o->ptr);
         break;
     default:
         serverPanic("Unknown hash encoding type");
@@ -362,7 +372,10 @@ void decrRefCount(robj *o) {
         case OBJ_STREAM: freeStreamObject(o); break;
         default: serverPanic("Unknown object type"); break;
         }
-        zfree(o);
+        if(o->encoding == OBJ_ENCODING_EMBSTR || o->encoding == OBJ_ENCODING_INT)
+            o->a->free(o);
+        else
+            zfree(o);
     } else {
         if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
         if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
@@ -416,7 +429,7 @@ int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
 }
 
 /* Try to encode a string object in order to save space */
-robj *tryObjectEncoding(robj *o) {
+robj *tryObjectEncodingA(robj *o, alloc a) {
     long value;
     sds s = o->ptr;
     size_t len;
@@ -455,7 +468,12 @@ robj *tryObjectEncoding(robj *o) {
             incrRefCount(shared.integers[value]);
             return shared.integers[value];
         } else {
-            if (o->encoding == OBJ_ENCODING_RAW) sdsfree(o->ptr);
+            if (o->encoding == OBJ_ENCODING_RAW) o->a->free(o->ptr);
+            if (allocCompare(o->a,a)) {
+                robj *newobj = createObjectA(OBJ_STRING,NULL,a);
+                o->a->free(o);
+                o = newobj;
+            }
             o->encoding = OBJ_ENCODING_INT;
             o->ptr = (void*) value;
             return o;
@@ -469,8 +487,8 @@ robj *tryObjectEncoding(robj *o) {
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT) {
         robj *emb;
 
-        if (o->encoding == OBJ_ENCODING_EMBSTR) return o;
-        emb = createEmbeddedStringObject(s,sdslen(s));
+        if (o->encoding == OBJ_ENCODING_EMBSTR && !allocCompare(o->a,a)) return o;
+        emb = createEmbeddedStringObjectA(s,sdslen(s),a);
         decrRefCount(o);
         return emb;
     }
@@ -485,9 +503,14 @@ robj *tryObjectEncoding(robj *o) {
      * is only entered if the length of the string is greater than
      * OBJ_ENCODING_EMBSTR_SIZE_LIMIT. */
     if (o->encoding == OBJ_ENCODING_RAW &&
-        sdsavail(s) > len/10)
-    {
-        o->ptr = sdsRemoveFreeSpace(o->ptr);
+        sdsavail(s) > len/10 &&
+        !allocCompare(o->a,a)){
+        o->ptr = sdsRemoveFreeSpaceA(o->ptr,a);
+    } else {
+        sds copy = sdsdupA(o->ptr,a);
+        sdsfreeA (o->ptr,o->a);
+        o->ptr = copy;
+        o->a = a;
     }
 
     /* Return the original object. */
@@ -496,7 +519,7 @@ robj *tryObjectEncoding(robj *o) {
 
 /* Get a decoded version of an encoded object (returned as a new object).
  * If the object is already raw-encoded just increment the ref count. */
-robj *getDecodedObject(robj *o) {
+robj *getDecodedObjectA(robj *o, alloc a) {
     robj *dec;
 
     if (sdsEncodedObject(o)) {
@@ -507,7 +530,7 @@ robj *getDecodedObject(robj *o) {
         char buf[32];
 
         ll2string(buf,32,(long)o->ptr);
-        dec = createStringObject(buf,strlen(buf));
+        dec = createStringObjectA(buf,strlen(buf),a);
         return dec;
     } else {
         serverPanic("Unknown encoding type");

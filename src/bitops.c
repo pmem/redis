@@ -475,19 +475,25 @@ int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
  * so that the 'maxbit' bit can be addressed. The object is finally
  * returned. Otherwise if the key holds a wrong type NULL is returned and
  * an error is sent to the client. */
-robj *lookupStringForBitCommand(client *c, size_t maxbit) {
+robj *lookupStringForBitCommandA(client *c, size_t maxbit, alloc a) {
     size_t byte = maxbit >> 3;
     robj *o = lookupKeyWrite(c->db,c->argv[1]);
 
     if (o == NULL) {
-        o = createObject(OBJ_STRING,sdsnewlen(NULL, byte+1));
+        o = createObject(OBJ_STRING,sdsnewlenA(NULL,byte+1,a));
+        o->a = a;
         dbAdd(c->db,c->argv[1],o);
     } else {
         if (checkType(c,o,OBJ_STRING)) return NULL;
-        o = dbUnshareStringValue(c->db,c->argv[1],o);
-        o->ptr = sdsgrowzero(o->ptr,byte+1);
+        o = dbUnshareStringValueA(c->db,c->argv[1],o,a);
+        o->ptr = sdsgrowzeroA(o->ptr,byte+1,a);
+        o->a = a;
     }
     return o;
+}
+
+robj *lookupStringForBitCommand(client *c, size_t maxbit) {
+    return lookupStringForBitCommandA(c, maxbit, m_alloc);
 }
 
 /* Return a pointer to the string object content, and stores its length
@@ -655,7 +661,7 @@ void bitopCommand(client *c) {
 
     /* Compute the bit operation, if at least one string is not empty. */
     if (maxlen) {
-        res = (unsigned char*) sdsnewlen(NULL,maxlen);
+        res = (unsigned char*) sdsnewlenA(NULL,maxlen,m_alloc);
         unsigned char output, byte;
         unsigned long i;
 
@@ -754,6 +760,7 @@ void bitopCommand(client *c) {
     /* Store the computed value into the target key */
     if (maxlen) {
         o = createObject(OBJ_STRING,res);
+        o->a = m_alloc;
         setKey(c->db,targetkey,o);
         notifyKeyspaceEvent(NOTIFY_STRING,"set",targetkey,c->db->id);
         decrRefCount(o);

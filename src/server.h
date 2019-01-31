@@ -68,6 +68,7 @@ typedef long long mstime_t; /* millisecond time type. */
 #include "quicklist.h"  /* Lists are encoded as linked lists of
                            N-elements flat arrays */
 #include "rax.h"     /* Radix tree */
+#include "alloc.h"   /* Alternative allocators */
 
 /* Following includes allow test functions to be called from Redis main() */
 #include "zipmap.h"
@@ -609,6 +610,7 @@ typedef struct redisObject {
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
     int refcount;
+    alloc a;               /* Allocator */
     void *ptr;
 } robj;
 
@@ -1381,14 +1383,16 @@ extern struct redisServer server;
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
 extern dictType objectKeyHeapPointerValueDictType;
-extern dictType setDictType;
+extern dictType setDictTypeZ;
+extern dictType setDictTypeM;
 extern dictType zsetDictType;
 extern dictType clusterNodesDictType;
 extern dictType clusterNodesBlackListDictType;
 extern dictType dbDictType;
 extern dictType shaScriptObjectDictType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
-extern dictType hashDictType;
+extern dictType hashDictTypeM;
+extern dictType hashDictTypeZ;
 extern dictType replScriptCacheDictType;
 extern dictType keyptrDictType;
 extern dictType modulesDictType;
@@ -1502,15 +1506,35 @@ void addReplyStatusFormat(client *c, const char *fmt, ...);
 /* List data type */
 void listTypeTryConversion(robj *subject, robj *value);
 void listTypePush(robj *subject, robj *value, int where);
-robj *listTypePop(robj *subject, int where);
+robj *listTypePopA(robj *subject, int where, alloc a);
+static inline robj *listTypePop(robj *subject, int where) { return listTypePopA(subject, where, z_alloc); }
+static inline robj *listTypePopM(robj *subject, int where) { return listTypePopA(subject, where, m_alloc); }
 unsigned long listTypeLength(const robj *subject);
-listTypeIterator *listTypeInitIterator(robj *subject, long index, unsigned char direction);
+listTypeIterator *listTypeInitIteratorA(robj *subject, long index, unsigned char direction, alloc a);
+static inline listTypeIterator *listTypeInitIterator(robj *subject, long index, unsigned char direction) {
+    return listTypeInitIteratorA(subject, index, direction, z_alloc);
+}
+static inline listTypeIterator *listTypeInitIteratorM(robj *subject, long index, unsigned char direction) {
+    return listTypeInitIteratorA(subject, index, direction, m_alloc);
+}
 void listTypeReleaseIterator(listTypeIterator *li);
-int listTypeNext(listTypeIterator *li, listTypeEntry *entry);
+int listTypeNextA(listTypeIterator *li, listTypeEntry *entry, alloc a);
+static inline int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
+    return listTypeNextA(li, entry, z_alloc);
+}
+static inline int listTypeNextM(listTypeIterator *li, listTypeEntry *entry) {
+    return listTypeNextA(li, entry, m_alloc);
+}
 robj *listTypeGet(listTypeEntry *entry);
-void listTypeInsert(listTypeEntry *entry, robj *value, int where);
+void listTypeInsertA(listTypeEntry *entry, robj *value, int where, alloc a);
+static inline void listTypeInsertM(listTypeEntry *entry, robj *value, int where) {
+    listTypeInsertA(entry, value, where, m_alloc);
+}
 int listTypeEqual(listTypeEntry *entry, robj *o);
-void listTypeDelete(listTypeIterator *iter, listTypeEntry *entry);
+void listTypeDeleteA(listTypeIterator *iter, listTypeEntry *entry, alloc a);
+static inline void listTypeDeleteM(listTypeIterator *iter, listTypeEntry *entry) {
+    listTypeDeleteA(iter, entry, m_alloc);
+}
 void listTypeConvert(robj *subject, int enc);
 void unblockClientWaitingData(client *c);
 void popGenericCommand(client *c, int where);
@@ -1537,26 +1561,53 @@ void freeListObject(robj *o);
 void freeSetObject(robj *o);
 void freeZsetObject(robj *o);
 void freeHashObject(robj *o);
-robj *createObject(int type, void *ptr);
-robj *createStringObject(const char *ptr, size_t len);
-robj *createRawStringObject(const char *ptr, size_t len);
-robj *createEmbeddedStringObject(const char *ptr, size_t len);
+robj *createObjectA(int type, void *ptr, alloc a);
+static inline robj *createObject(int type, void *ptr) { return createObjectA(type, ptr, z_alloc); }
+static inline robj *createObjectM(int type, void *ptr) { return createObjectA(type, ptr, m_alloc); }
+robj *createStringObjectA(const char *ptr, size_t len, alloc a);
+static inline robj *createStringObject(const char *ptr, size_t len) { return createStringObjectA(ptr, len, z_alloc); }
+static inline robj *createStringObjectM(const char *ptr, size_t len) { return createStringObjectA(ptr, len, m_alloc); }
+robj *createRawStringObjectA(const char *ptr, size_t len, alloc a);
+static inline robj *createRawStringObject(const char *ptr, size_t len) { return createRawStringObjectA(ptr, len, z_alloc); }
+robj *createEmbeddedStringObjectA(const char *ptr, size_t len, alloc a);
+static inline robj *createEmbeddedStringObject(const char *ptr, size_t len) { return createEmbeddedStringObjectA(ptr, len, z_alloc); }
 robj *dupStringObject(const robj *o);
 int isSdsRepresentableAsLongLong(sds s, long long *llval);
 int isObjectRepresentableAsLongLong(robj *o, long long *llongval);
-robj *tryObjectEncoding(robj *o);
-robj *getDecodedObject(robj *o);
+robj *tryObjectEncodingA(robj *o, alloc a);
+static inline robj *tryObjectEncoding(robj *o) { return tryObjectEncodingA(o, z_alloc); }
+static inline robj *tryObjectEncodingM(robj *o) { return tryObjectEncodingA(o, m_alloc); }
+robj *getDecodedObjectA(robj *o, alloc a);
+static inline robj *getDecodedObject(robj *o) { return getDecodedObjectA(o, z_alloc); }
 size_t stringObjectLen(robj *o);
-robj *createStringObjectFromLongLong(long long value);
-robj *createStringObjectFromLongLongForValue(long long value);
-robj *createStringObjectFromLongDouble(long double value, int humanfriendly);
-robj *createQuicklistObject(void);
+robj *createStringObjectFromLongLongA(long long value, alloc a);
+static inline robj *createStringObjectFromLongLong(long long value) { return createStringObjectFromLongLongA(value, s_alloc); }
+static inline robj *createStringObjectFromLongLongM(long long value) { return createStringObjectFromLongLongA(value, m_alloc); }
+robj *createStringObjectFromLongLongForValueA(long long value, alloc a);
+static inline robj *createStringObjectFromLongLongForValue(long long value) { return createStringObjectFromLongLongForValueA(value, z_alloc); }
+static inline robj *createStringObjectFromLongLongForValueM(long long value) { return createStringObjectFromLongLongForValueA(value, m_alloc); }
+robj *createStringObjectFromLongDoubleA(long double value, int humanfriendly, alloc a);
+static inline robj *createStringObjectFromLongDouble(long double value, int humanfriendly) { return createStringObjectFromLongDoubleA(value, humanfriendly, s_alloc); }
+static inline robj *createStringObjectFromLongDoubleM(long double value, int humanfriendly) { return createStringObjectFromLongDoubleA(value, humanfriendly, m_alloc); }
+
+robj *createQuicklistObjectA(alloc a);
+static inline robj *createQuicklistObject(void) { return createQuicklistObjectA(z_alloc); }
+static inline robj *createQuicklistObjectM(void) { return createQuicklistObjectA(m_alloc); }
 robj *createZiplistObject(void);
-robj *createSetObject(void);
-robj *createIntsetObject(void);
-robj *createHashObject(void);
-robj *createZsetObject(void);
-robj *createZsetZiplistObject(void);
+robj *createSetObjectA(alloc a);
+static inline robj *createSetObject(void){ return createSetObjectA(z_alloc); }
+static inline robj *createSetObjectM(void){ return createSetObjectA(m_alloc); }
+robj *createIntsetObjectA(alloc a);
+static inline robj *createIntsetObject(void) { return createIntsetObjectA(z_alloc); }
+static inline robj *createIntsetObjectM(void) { return createIntsetObjectA(m_alloc); }
+robj *createHashObjectA(alloc a);
+static inline robj *createHashObject(void) { return createHashObjectA(z_alloc); }
+robj *createZsetObjectA(alloc a);
+static inline robj *createZsetObject(void){ return createZsetObjectA(z_alloc); }
+static inline robj *createZsetObjectM(void){ return createZsetObjectA(m_alloc); }
+robj *createZsetZiplistObjectA(alloc a);
+static inline robj *createZsetZiplistObject(void){ return createZsetZiplistObjectA(z_alloc); }
+static inline robj *createZsetZiplistObjectM(void){ return createZsetZiplistObjectA(m_alloc); }
 robj *createStreamObject(void);
 robj *createModuleObject(moduleType *mt, void *value);
 int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg);
@@ -1672,10 +1723,10 @@ typedef struct {
 } zlexrangespec;
 
 zskiplist *zslCreate(void);
-void zslFree(zskiplist *zsl);
+void zslFree(zskiplist *zsl, alloc a);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele);
-unsigned char *zzlInsert(unsigned char *zl, sds ele, double score);
-int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node);
+unsigned char *zzlInsert(unsigned char *zl, sds ele, double score, alloc a);
+int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node, alloc a);
 zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range);
 zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range);
 double zzlGetScore(unsigned char *sptr);
@@ -1688,9 +1739,13 @@ void zsetConvert(robj *zobj, int encoding);
 void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen);
 int zsetScore(robj *zobj, sds member, double *score);
 unsigned long zslGetRank(zskiplist *zsl, double score, sds o);
-int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore);
+int zsetAddA(robj *zobj, double score, sds ele, int *flags, double *newscore, alloc a);
+static inline int zsetAdd(robj *zobj, double score, sds ele, int *flags, double *newscore){ return zsetAddA(zobj,score,ele,flags,newscore,z_alloc); }
+static inline int zsetAddM(robj *zobj, double score, sds ele, int *flags, double *newscore){ return zsetAddA(zobj,score,ele,flags,newscore,m_alloc); }
 long zsetRank(robj *zobj, sds ele, int reverse);
-int zsetDel(robj *zobj, sds ele);
+int zsetDelA(robj *zobj, sds ele, alloc a);
+static inline int zsetDel(robj *zobj, sds ele){ return zsetDelA(zobj,ele,z_alloc); }
+static inline int zsetDelM(robj *zobj, sds ele){ return zsetDelA(zobj,ele,m_alloc); }
 void genericZpopCommand(client *c, robj **keyv, int keyc, int where, int emitkey, robj *countarg);
 sds ziplistGetObject(unsigned char *sptr);
 int zslValueGteMin(double value, zrangespec *spec);
@@ -1754,9 +1809,14 @@ void freeMemoryOverheadData(struct redisMemOverhead *mh);
 int restartServer(int flags, mstime_t delay);
 
 /* Set data type */
-robj *setTypeCreate(sds value);
-int setTypeAdd(robj *subject, sds value);
-int setTypeRemove(robj *subject, sds value);
+robj *setTypeCreateA(sds value, alloc a);
+static inline robj *setTypeCreateM(sds value) { return setTypeCreateA(value, m_alloc);}
+int setTypeAddA(robj *subject, sds value, alloc a);
+static inline int setTypeAdd(robj *subject, sds value) { return setTypeAddA(subject, value, z_alloc); }
+static inline int setTypeAddM(robj *subject, sds value) { return setTypeAddA(subject, value, m_alloc); }
+int setTypeRemoveA(robj *subject, sds value, alloc a);
+static inline int setTypeRemove(robj *subject, sds value) { return setTypeRemoveA(subject, value, z_alloc); }
+static inline int setTypeRemoveM(robj *subject, sds value) { return setTypeRemoveA(subject, value, m_alloc); }
 int setTypeIsMember(robj *subject, sds value);
 setTypeIterator *setTypeInitIterator(robj *subject);
 void setTypeReleaseIterator(setTypeIterator *si);
@@ -1765,18 +1825,26 @@ sds setTypeNextObject(setTypeIterator *si);
 int setTypeRandomElement(robj *setobj, sds *sdsele, int64_t *llele);
 unsigned long setTypeRandomElements(robj *set, unsigned long count, robj *aux_set);
 unsigned long setTypeSize(const robj *subject);
-void setTypeConvert(robj *subject, int enc);
+void setTypeConvertA(robj *subject, int enc, alloc a);
+static inline void setTypeConvert(robj *subject, int enc){setTypeConvertA(subject, enc, z_alloc);}
+static inline void setTypeConvertM(robj *subject, int enc){setTypeConvertA(subject, enc, m_alloc);}
 
 /* Hash data type */
 #define HASH_SET_TAKE_FIELD (1<<0)
 #define HASH_SET_TAKE_VALUE (1<<1)
 #define HASH_SET_COPY 0
 
-void hashTypeConvert(robj *o, int enc);
+void hashTypeConvertA(robj *o, int enc, alloc a);
+static inline void hashTypeConvert(robj *o, int enc) { hashTypeConvertA(o,enc,z_alloc); }
+static inline void hashTypeConvertM(robj *o, int enc) { hashTypeConvertA(o,enc,m_alloc); }
+
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
 void hashTypeTryObjectEncoding(robj *subject, robj **o1, robj **o2);
 int hashTypeExists(robj *o, sds key);
-int hashTypeDelete(robj *o, sds key);
+int hashTypeDeleteA(robj *o, sds key, alloc a);
+static inline int hashTypeDelete(robj *o, sds key) {
+    return hashTypeDeleteA(o, key, z_alloc);
+}
 unsigned long hashTypeLength(const robj *o);
 hashTypeIterator *hashTypeInitIterator(robj *subject);
 void hashTypeReleaseIterator(hashTypeIterator *hi);
@@ -1787,10 +1855,28 @@ void hashTypeCurrentFromZiplist(hashTypeIterator *hi, int what,
                                 long long *vll);
 sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
 void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, unsigned int *vlen, long long *vll);
-sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
-robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
+sds hashTypeCurrentObjectNewSdsA(hashTypeIterator *hi, int what, alloc a);
+static inline sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
+    return hashTypeCurrentObjectNewSdsA(hi, what, z_alloc);
+}
+static inline sds hashTypeCurrentObjectNewSdsM(hashTypeIterator *hi, int what) {
+    return hashTypeCurrentObjectNewSdsA(hi, what, m_alloc);
+}
+robj *hashTypeLookupWriteOrCreateA(client *c, robj *key, alloc a);
+static inline robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
+    return hashTypeLookupWriteOrCreateA(c, key, z_alloc);
+}
+static inline robj *hashTypeLookupWriteOrCreateM(client *c, robj *key) {
+    return hashTypeLookupWriteOrCreateA(c, key, m_alloc);
+}
 robj *hashTypeGetValueObject(robj *o, sds field);
-int hashTypeSet(robj *o, sds field, sds value, int flags);
+int hashTypeSetA(robj *o, sds field, sds value, int flags, alloc a);
+static inline int hashTypeSet(robj *o, sds field, sds value, int flags) {
+    return hashTypeSetA(o, field, value, flags, z_alloc);
+}
+static inline int hashTypeSetM(robj *o, sds field, sds value, int flags) {
+    return hashTypeSetA(o, field, value, flags, m_alloc);
+}
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);
@@ -1831,13 +1917,17 @@ void objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle,
 #define LOOKUP_NONE 0
 #define LOOKUP_NOTOUCH (1<<0)
 void dbAdd(redisDb *db, robj *key, robj *val);
+void dbAddZ(redisDb *db, robj *key, robj *val);
+void dbAddM(redisDb *db, robj *key, robj *val);
 void dbOverwrite(redisDb *db, robj *key, robj *val);
 void setKey(redisDb *db, robj *key, robj *val);
 int dbExists(redisDb *db, robj *key);
 robj *dbRandomKey(redisDb *db);
 int dbSyncDelete(redisDb *db, robj *key);
 int dbDelete(redisDb *db, robj *key);
-robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o);
+robj *dbUnshareStringValueA(redisDb *db, robj *key, robj *o, alloc a);
+static inline robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) { return dbUnshareStringValueA(db, key, o, s_alloc); }
+static inline robj *dbUnshareStringValueM(redisDb *db, robj *key, robj *o) { return dbUnshareStringValueA(db, key, o, m_alloc); }
 
 #define EMPTYDB_NO_FLAGS 0      /* No flags. */
 #define EMPTYDB_ASYNC (1<<0)    /* Reclaim memory in another thread. */
@@ -1930,6 +2020,8 @@ unsigned long LFUDecrAndReturn(robj *o);
 uint64_t dictSdsHash(const void *key);
 int dictSdsKeyCompare(void *privdata, const void *key1, const void *key2);
 void dictSdsDestructor(void *privdata, void *val);
+void dictSdsDestructorM(void *privdata, void *val);
+void dictSdsDestructorVar(void *privdata, void *val);
 
 /* Git SHA1 */
 char *redisGitSHA1(void);
@@ -2024,6 +2116,7 @@ void debugCommand(client *c);
 void msetCommand(client *c);
 void msetnxCommand(client *c);
 void zaddCommand(client *c);
+void zaddCommandZ(client *c);
 void zincrbyCommand(client *c);
 void zrangeCommand(client *c);
 void zrangebyscoreCommand(client *c);

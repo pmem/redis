@@ -86,7 +86,7 @@ static inline char sdsReqType(size_t string_size) {
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
  * \0 characters in the middle, as the length is stored in the sds header. */
-sds sdsnewlen(const void *init, size_t initlen) {
+sds sdsnewlenA(const void *init, size_t initlen, alloc a) {
     void *sh;
     sds s;
     char type = sdsReqType(initlen);
@@ -96,11 +96,11 @@ sds sdsnewlen(const void *init, size_t initlen) {
     int hdrlen = sdsHdrSize(type);
     unsigned char *fp; /* flags pointer. */
 
-    sh = s_malloc(hdrlen+initlen+1);
+    sh = a->alloc(hdrlen+initlen+1);
     if (init==SDS_NOINIT)
         init = NULL;
     else if (!init)
-        memset(sh, 0, hdrlen+initlen+1);
+        a->memset(sh, 0, hdrlen+initlen+1);
     if (sh == NULL) return NULL;
     s = (char*)sh+hdrlen;
     fp = ((unsigned char*)s)-1;
@@ -139,7 +139,7 @@ sds sdsnewlen(const void *init, size_t initlen) {
         }
     }
     if (initlen && init)
-        memcpy(s, init, initlen);
+        a->memcpy(s, init, initlen);
     s[initlen] = '\0';
     return s;
 }
@@ -157,14 +157,14 @@ sds sdsnew(const char *init) {
 }
 
 /* Duplicate an sds string. */
-sds sdsdup(const sds s) {
-    return sdsnewlen(s, sdslen(s));
+sds sdsdupA(const sds s, alloc a) {
+    return sdsnewlenA(s, sdslen(s), a);
 }
 
 /* Free an sds string. No operation is performed if 's' is NULL. */
-void sdsfree(sds s) {
+void sdsfreeA(sds s, alloc a) {
     if (s == NULL) return;
-    s_free((char*)s-sdsHdrSize(s[-1]));
+    a->free((char*)s-sdsHdrSize(s[-1]));
 }
 
 /* Set the sds string length to the length as obtained with strlen(), so
@@ -201,7 +201,7 @@ void sdsclear(sds s) {
  *
  * Note: this does not change the *length* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
-sds sdsMakeRoomFor(sds s, size_t addlen) {
+sds sdsMakeRoomForA(sds s, size_t addlen, alloc a) {
     void *sh, *newsh;
     size_t avail = sdsavail(s);
     size_t len, newlen;
@@ -228,16 +228,16 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
 
     hdrlen = sdsHdrSize(type);
     if (oldtype==type) {
-        newsh = s_realloc(sh, hdrlen+newlen+1);
+        newsh = a->realloc(sh, hdrlen+newlen+1);
         if (newsh == NULL) return NULL;
         s = (char*)newsh+hdrlen;
     } else {
         /* Since the header size changes, need to move the string forward,
          * and can't use realloc */
-        newsh = s_malloc(hdrlen+newlen+1);
+        newsh = a->alloc(hdrlen+newlen+1);
         if (newsh == NULL) return NULL;
         memcpy((char*)newsh+hdrlen, s, len+1);
-        s_free(sh);
+        a->free(sh);
         s = (char*)newsh+hdrlen;
         s[-1] = type;
         sdssetlen(s, len);
@@ -252,7 +252,7 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
  *
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
-sds sdsRemoveFreeSpace(sds s) {
+sds sdsRemoveFreeSpaceA(sds s, alloc a) {
     void *sh, *newsh;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
     int hdrlen, oldhdrlen = sdsHdrSize(oldtype);
@@ -269,14 +269,14 @@ sds sdsRemoveFreeSpace(sds s) {
      * only if really needed. Otherwise if the change is huge, we manually
      * reallocate the string to use the different header type. */
     if (oldtype==type || type > SDS_TYPE_8) {
-        newsh = s_realloc(sh, oldhdrlen+len+1);
+        newsh = a->realloc(sh, oldhdrlen+len+1);
         if (newsh == NULL) return NULL;
         s = (char*)newsh+oldhdrlen;
     } else {
-        newsh = s_malloc(hdrlen+len+1);
+        newsh = a->alloc(hdrlen+len+1);
         if (newsh == NULL) return NULL;
         memcpy((char*)newsh+hdrlen, s, len+1);
-        s_free(sh);
+        a->free(sh);
         s = (char*)newsh+hdrlen;
         s[-1] = type;
         sdssetlen(s, len);
@@ -372,11 +372,11 @@ void sdsIncrLen(sds s, ssize_t incr) {
  *
  * if the specified length is smaller than the current length, no operation
  * is performed. */
-sds sdsgrowzero(sds s, size_t len) {
+sds sdsgrowzeroA(sds s, size_t len, alloc a) {
     size_t curlen = sdslen(s);
 
     if (len <= curlen) return s;
-    s = sdsMakeRoomFor(s,len-curlen);
+    s = sdsMakeRoomForA(s,len-curlen,a);
     if (s == NULL) return NULL;
 
     /* Make sure added region doesn't contain garbage */
@@ -390,10 +390,10 @@ sds sdsgrowzero(sds s, size_t len) {
  *
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
-sds sdscatlen(sds s, const void *t, size_t len) {
+sds sdscatlenA(sds s, const void *t, size_t len, alloc a) {
     size_t curlen = sdslen(s);
 
-    s = sdsMakeRoomFor(s,len);
+    s = sdsMakeRoomForA(s,len,a);
     if (s == NULL) return NULL;
     memcpy(s+curlen, t, len);
     sdssetlen(s, curlen+len);
@@ -507,11 +507,11 @@ int sdsull2str(char *s, unsigned long long v) {
  *
  * sdscatprintf(sdsempty(),"%lld\n", value);
  */
-sds sdsfromlonglong(long long value) {
+sds sdsfromlonglongA(long long value, alloc a) {
     char buf[SDS_LLSTR_SIZE];
     int len = sdsll2str(buf,value);
 
-    return sdsnewlen(buf,len);
+    return sdsnewlenA(buf,len,a);
 }
 
 /* Like sdscatprintf() but gets va_list instead of being variadic. */

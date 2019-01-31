@@ -171,13 +171,22 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  *
  * The program is aborted if the key already exists. */
 void dbAdd(redisDb *db, robj *key, robj *val) {
-    sds copy = sdsdup(key->ptr);
+    sds copy = sdsdupA(key->ptr, (server.keys_on_pm ? m_alloc : z_alloc));
     int retval = dictAdd(db->dict, copy, val);
 
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
     if (val->type == OBJ_LIST ||
         val->type == OBJ_ZSET)
         signalKeyAsReady(db, key);
+    if (server.cluster_enabled) slotToKeyAdd(key);
+}
+
+void dbAddZ(redisDb *db, robj *key, robj *val) {
+    sds copy = sdsdup(key->ptr);
+    int retval = dictAdd(db->dict, copy, val);
+
+    serverAssertWithInfo(NULL,key,retval == DICT_OK);
+    if (val->type == OBJ_LIST) signalKeyAsReady(db, key);
     if (server.cluster_enabled) slotToKeyAdd(key);
 }
 
@@ -314,11 +323,11 @@ int dbDelete(redisDb *db, robj *key) {
  * At this point the caller is ready to modify the object, for example
  * using an sdscat() call to append some data, or anything else.
  */
-robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
+robj *dbUnshareStringValueA(redisDb *db, robj *key, robj *o, alloc a) {
     serverAssert(o->type == OBJ_STRING);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
-        o = createRawStringObject(decoded->ptr, sdslen(decoded->ptr));
+        o = createRawStringObjectA(decoded->ptr, sdslen(decoded->ptr), a);
         decrRefCount(decoded);
         dbOverwrite(db,key,o);
     }

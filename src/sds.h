@@ -39,6 +39,8 @@ const char *SDS_NOINIT;
 #include <sys/types.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include "alloc.h"
+#include "sdsalloc.h"
 
 typedef char *sds;
 
@@ -215,13 +217,23 @@ static inline void sdssetalloc(sds s, size_t newlen) {
     }
 }
 
-sds sdsnewlen(const void *init, size_t initlen);
+sds sdsnewlenA(const void *init, size_t initlen, alloc a);
+static inline sds sdsnewlen(const void *init, size_t initlen) { return sdsnewlenA(init, initlen, s_alloc); }
+static inline sds sdsnewlenM(const void *init, size_t initlen) { return sdsnewlenA(init, initlen, m_alloc); }
+
 sds sdsnew(const char *init);
 sds sdsempty(void);
-sds sdsdup(const sds s);
-void sdsfree(sds s);
-sds sdsgrowzero(sds s, size_t len);
-sds sdscatlen(sds s, const void *t, size_t len);
+sds sdsdupA(const sds s, alloc a);
+static inline sds sdsdup(const sds s) { return sdsdupA(s, s_alloc); }
+static inline sds sdsdupM(const sds s) { return sdsdupA(s, m_alloc); }
+void sdsfreeA(sds s, alloc a);
+static inline void sdsfree(sds s) { sdsfreeA(s, s_alloc); }
+sds sdsgrowzeroA(sds s, size_t len, alloc a);
+static inline sds sdsgrowzero(sds s, size_t len) { return sdsgrowzeroA(s,len,s_alloc); }
+static inline sds sdsgrowzeroM(sds s, size_t len) { return sdsgrowzeroA(s,len,m_alloc); }
+sds sdscatlenA(sds s, const void *t, size_t len, alloc a);
+static inline sds sdscatlen(sds s, const void *t, size_t len) { return sdscatlenA(s, t, len, s_alloc); }
+static inline sds sdscatlenM(sds s, const void *t, size_t len) { return sdscatlenA(s, t, len, m_alloc); }
 sds sdscat(sds s, const char *t);
 sds sdscatsds(sds s, const sds t);
 sds sdscpylen(sds s, const char *t, size_t len);
@@ -245,7 +257,8 @@ sds *sdssplitlen(const char *s, ssize_t len, const char *sep, int seplen, int *c
 void sdsfreesplitres(sds *tokens, int count);
 void sdstolower(sds s);
 void sdstoupper(sds s);
-sds sdsfromlonglong(long long value);
+sds sdsfromlonglongA(long long value, alloc a);
+static inline sds sdsfromlonglong(long long value) { return sdsfromlonglongA(value, s_alloc); }
 sds sdscatrepr(sds s, const char *p, size_t len);
 sds *sdssplitargs(const char *line, int *argc);
 sds sdsmapchars(sds s, const char *from, const char *to, size_t setlen);
@@ -253,9 +266,11 @@ sds sdsjoin(char **argv, int argc, char *sep);
 sds sdsjoinsds(sds *argv, int argc, const char *sep, size_t seplen);
 
 /* Low level functions exposed to the user API */
-sds sdsMakeRoomFor(sds s, size_t addlen);
+sds sdsMakeRoomForA(sds s, size_t addlen, alloc a);
+static inline sds sdsMakeRoomFor(sds s, size_t addlen) { return sdsMakeRoomForA(s, addlen, s_alloc); }
 void sdsIncrLen(sds s, ssize_t incr);
-sds sdsRemoveFreeSpace(sds s);
+sds sdsRemoveFreeSpaceA(sds s, alloc a);
+static inline sds sdsRemoveFreeSpace(sds s) { return sdsRemoveFreeSpaceA(s, s_alloc); }
 size_t sdsAllocSize(sds s);
 void *sdsAllocPtr(sds s);
 
