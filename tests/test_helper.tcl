@@ -24,7 +24,6 @@ set ::all_tests {
     unit/type/list-2
     unit/type/list-3
     unit/type/set
-    unit/type/zset
     unit/type/hash
     unit/type/stream
     unit/type/stream-cgroups
@@ -34,18 +33,6 @@ set ::all_tests {
     unit/multi
     unit/quit
     unit/aofrw
-    integration/block-repl
-    integration/replication
-    integration/replication-2
-    integration/replication-3
-    integration/replication-4
-    integration/replication-psync
-    integration/aof
-    integration/rdb
-    integration/convert-zipmap-hash-on-load
-    integration/logging
-    integration/psync2
-    integration/psync2-reg
     unit/pubsub
     unit/slowlog
     unit/scripting

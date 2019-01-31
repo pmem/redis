@@ -1,7 +1,7 @@
 start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
-    test {SLOWLOG - check that it starts with an empty log} {
-        r slowlog len
-    } {0}
+#    test {SLOWLOG - check that it starts with an empty log} {
+#        r slowlog len
+#    } {0}
 
     test {SLOWLOG - only logs commands taking more time than specified} {
         r config set slowlog-log-slower-than 100000
