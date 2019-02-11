@@ -1344,6 +1344,8 @@ uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
 size_t redisPopcount(void *s, long count);
 void redisSetProcTitle(char *title);
+void addToList(robj* old);
+void listEmptyM(listM *list);
 
 /* networking.c -- Networking and Client related operations */
 client *createClient(int fd);
@@ -1471,6 +1473,7 @@ void execCommandPropagateMulti(client *c);
 void decrRefCount(robj *o);
 void decrRefCountVoid(void *o);
 void incrRefCount(robj *o);
+void freeRobj(robj* o);
 robj *makeObjectShared(robj *o);
 robj *resetRefCount(robj *obj);
 void freeStringObject(robj *o);
@@ -1856,6 +1859,10 @@ int dbAsyncDelete(redisDb *db, robj *key);
 void emptyDbAsync(redisDb *db);
 void slotToKeyFlushAsync(void);
 size_t lazyfreeGetPendingObjectsCount(void);
+
+listM* robjUpdateValList;
+_Bool isListMinitialised;
+_Bool forkActive;
 
 /* API to get key arguments from commands */
 int *getKeysFromCommand(struct redisCommand *cmd, robj **argv, int argc, int *numkeys);

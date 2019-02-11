@@ -320,24 +320,27 @@ void incrRefCount(robj *o) {
 }
 
 void decrRefCount(robj *o) {
-    if (o->refcount == 1) {
-        switch(o->type) {
-        case OBJ_STRING: freeStringObject(o); break;
-        case OBJ_LIST: freeListObject(o); break;
-        case OBJ_SET: freeSetObject(o); break;
-        case OBJ_ZSET: freeZsetObject(o); break;
-        case OBJ_HASH: freeHashObject(o); break;
-        case OBJ_MODULE: freeModuleObject(o); break;
-        default: serverPanic("Unknown object type"); break;
-        }
-        if(o->encoding == OBJ_ENCODING_EMBSTR || o->encoding == OBJ_ENCODING_INT)
-            o->a->free(o);
-        else
-            zfree(o);
-    } else {
-        if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
-        if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
-    }
+	if (forkActive)
+	{
+		if (o->encoding == OBJ_ENCODING_RAW || o->encoding == OBJ_ENCODING_EMBSTR)
+		{
+			if (o->encoding == OBJ_ENCODING_RAW)
+				mfree(o);
+			else
+			{
+				if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
+				if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
+			}
+		}
+		else
+		{
+			freeRobj(o);
+		}
+	}
+	else
+	{
+		freeRobj(o);
+	}
 }
 
 /* This variant of decrRefCount() gets its argument as void, and is useful
@@ -345,6 +348,29 @@ void decrRefCount(robj *o) {
  * prototype for the free method. */
 void decrRefCountVoid(void *o) {
     decrRefCount(o);
+}
+
+void freeRobj(robj* o)
+{
+	if (o->refcount == 1) {
+		switch (o->type) {
+		case OBJ_STRING: freeStringObject(o); break;
+		case OBJ_LIST: freeListObject(o); break;
+		case OBJ_SET: freeSetObject(o); break;
+		case OBJ_ZSET: freeZsetObject(o); break;
+		case OBJ_HASH: freeHashObject(o); break;
+		case OBJ_MODULE: freeModuleObject(o); break;
+		default: serverPanic("Unknown object type"); break;
+		}
+		if (o->encoding == OBJ_ENCODING_EMBSTR || o->encoding == OBJ_ENCODING_INT)
+			o->a->free(o);
+		else
+			zfree(o);
+	}
+	else {
+		if (o->refcount <= 0) serverPanic("decrRefCount against refcount <= 0");
+		if (o->refcount != OBJ_SHARED_REFCOUNT) o->refcount--;
+	}
 }
 
 /* This function set the ref count to zero without freeing the object.

@@ -52,6 +52,16 @@ list *listCreate(void)
     return list;
 }
 
+listM *listCreateM(void)
+{
+	struct listM *list;
+
+	if ((list = zmalloc(sizeof(*list))) == NULL)
+		return NULL;
+	list->head = NULL;
+	return list;
+}
+
 /* Remove all the elements from the list without destroying the list itself. */
 void listEmpty(list *list)
 {
@@ -103,6 +113,24 @@ list *listAddNodeHead(list *list, void *value)
     }
     list->len++;
     return list;
+}
+
+listM *listAddNodeHeadM(listM *list, void *value)
+{
+	listNodeM *node;
+
+	if ((node = zmalloc(sizeof(*node))) == NULL)
+		return NULL;
+	node->value = value;
+	if (list->head == NULL) {
+		list->head = node;
+		node->next = NULL;
+	}
+	else {
+		node->next = list->head;
+		list->head = node;
+	}
+	return list;
 }
 
 /* Add a new node to the list, to tail, containing the specified 'value'

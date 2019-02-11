@@ -754,10 +754,10 @@ void loadServerConfigFromString(char *config) {
         sdsfreesplitres(argv,argc);
     }
     /* Disabling AOF and RDB */
-	if (server.use_volatile) {
-		server.aof_state = AOF_OFF;
-		resetServerSaveParams();
-    }
+	//if (server.use_volatile) {
+	//	server.aof_state = AOF_OFF;
+	//	resetServerSaveParams();
+ //   }
     /* Sanity checks. */
     if (server.cluster_enabled && server.masterhost) {
         linenum = slaveof_linenum;

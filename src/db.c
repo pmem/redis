@@ -190,18 +190,73 @@ void dbAddZ(redisDb *db, robj *key, robj *val) {
 void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictEntry *de = dictFind(db->dict,key->ptr);
 
+	if (!isListMinitialised)
+	{
+		robjUpdateValList = listCreateM();
+		isListMinitialised = 1;
+	}
+	
     serverAssertWithInfo(NULL,key,de != NULL);
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        robj *old = dictGetVal(de);
-        int saved_lru = old->lru;
-        dictReplace(db->dict, key->ptr, val);
-        val->lru = saved_lru;
-        /* LFU should be not only copied but also updated
-         * when a key is overwritten. */
-        updateLFU(val);
-    } else {
-        dictReplace(db->dict, key->ptr, val);
-    }
+	if (forkActive)
+	{
+		if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+			robj* old = dictGetVal(de);
+			addToList(old);
+			int saved_lru = old->lru;
+			dictReplace(db->dict, key->ptr, val);
+			val->lru = saved_lru;
+			/* LFU should be not only copied but also updated
+			 * when a key is overwritten. */
+			updateLFU(val);
+		}
+		else {
+			robj* old = dictGetVal(de);
+			addToList(old);
+			dictReplace(db->dict, key->ptr, val);
+		}
+	}
+	else
+	{
+		if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+			robj *old = dictGetVal(de);
+			int saved_lru = old->lru;
+			dictReplace(db->dict, key->ptr, val);
+			val->lru = saved_lru;
+			/* LFU should be not only copied but also updated
+			 * when a key is overwritten. */
+			updateLFU(val);
+		}
+		else {
+			dictReplace(db->dict, key->ptr, val);
+		}
+	}
+}
+
+void addToList(robj* old)
+{
+	if (old->encoding == OBJ_ENCODING_RAW)
+	{
+		robjUpdateValList = listAddNodeHeadM(robjUpdateValList, old->ptr);
+	}
+	else if (old->encoding == OBJ_ENCODING_EMBSTR)
+	{
+		robjUpdateValList = listAddNodeHeadM(robjUpdateValList, old);
+	}
+}
+
+void listEmptyM(listM *list)
+{
+	listNodeM *current, *next;
+	current = list->head;
+	while (current != NULL) {
+		next = current->next;
+
+		mfree(current->value);
+		zfree(current);
+
+		current = next;
+	}
+	list->head = NULL;
 }
 
 /* High level Set operation. This function can be used in order to set

@@ -39,6 +39,11 @@ typedef struct listNode {
     void *value;
 } listNode;
 
+typedef struct listNodeM {
+	struct listNodeM *next;
+	void *value;
+} listNodeM;
+
 typedef struct listIter {
     listNode *next;
     int direction;
@@ -52,6 +57,10 @@ typedef struct list {
     int (*match)(void *ptr, void *key);
     unsigned long len;
 } list;
+
+typedef struct listM {
+	listNodeM *head;
+} listM;
 
 /* Functions implemented as macros */
 #define listLength(l) ((l)->len)
@@ -71,9 +80,11 @@ typedef struct list {
 
 /* Prototypes */
 list *listCreate(void);
+listM *listCreateM(void);
 void listRelease(list *list);
 void listEmpty(list *list);
 list *listAddNodeHead(list *list, void *value);
+listM *listAddNodeHeadM(listM *list, void *value);
 list *listAddNodeTail(list *list, void *value);
 list *listInsertNode(list *list, listNode *old_node, void *value, int after);
 void listDelNode(list *list, listNode *node);
