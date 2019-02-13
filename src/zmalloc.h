@@ -95,7 +95,7 @@ void *zmemcpy(void* dst, const void* src, size_t num);
 void *zmemset(void* ptr, int value, size_t num);
 
 #ifdef USE_MEMKIND
-#define MEMKIND_PREFIX_SIZE 8
+#define MEMKIND_PREFIX_SIZE sizeof(uint8_t)
 void zmalloc_init_pmem_functions(void* (*_pmem_malloc)(size_t),
                                  void (*_pmem_free)(void*),
                                  void* (*_pmem_realloc)(void*,size_t));

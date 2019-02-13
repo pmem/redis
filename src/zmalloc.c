@@ -126,7 +126,7 @@ void *zmalloc_local(size_t size) {
 void *zmalloc_pmem(size_t size) {
 #ifdef USE_MEMKIND
     void* ptr = pmem_malloc(size + MEMKIND_PREFIX_SIZE);
-    uint64_t *is_ram = ptr;
+    uint8_t *is_ram = ptr;
     *is_ram = 0;
     return (void*)((char*)ptr + MEMKIND_PREFIX_SIZE);
 #else
@@ -137,7 +137,7 @@ void *zmalloc_pmem(size_t size) {
 void *zmalloc(size_t size) {
 #ifdef USE_MEMKIND
     void* ptr = zmalloc_local(size + MEMKIND_PREFIX_SIZE);
-    uint64_t *is_ram = ptr;
+    uint8_t *is_ram = ptr;
     *is_ram = 1;
     return (void*)((char*)ptr + MEMKIND_PREFIX_SIZE);
 #else
@@ -180,7 +180,7 @@ static void *zcalloc_local(size_t size) {
 void *zcalloc(size_t size) {
 #ifdef USE_MEMKIND
     void* ptr = zcalloc_local(size + MEMKIND_PREFIX_SIZE);
-    uint64_t *is_ram = ptr;
+    uint8_t *is_ram = ptr;
     *is_ram = 1;
     return (void*)((char*)ptr + MEMKIND_PREFIX_SIZE);
 #else
@@ -220,22 +220,22 @@ void *zrealloc(void *ptr, size_t size) {
 #ifdef USE_MEMKIND
     void* new_ptr = NULL;
     if (ptr) {
-        uint64_t *is_ram = (uint64_t*)((char*)(ptr) - MEMKIND_PREFIX_SIZE);
+        uint8_t *is_ram = (uint8_t*)((char*)(ptr) - MEMKIND_PREFIX_SIZE);
         if(*is_ram) {
             new_ptr = zrealloc_local((void*)(is_ram), size + MEMKIND_PREFIX_SIZE);
-            uint64_t *is_ram = new_ptr;
+            uint8_t *is_ram = new_ptr;
             *is_ram = 1;
             return (char*)new_ptr + MEMKIND_PREFIX_SIZE;
         }
         else {
             new_ptr = pmem_realloc((void*)(is_ram), size + MEMKIND_PREFIX_SIZE);
-            uint64_t *is_ram = new_ptr;
+            uint8_t *is_ram = new_ptr;
             *is_ram = 0;
             return (char*)new_ptr + MEMKIND_PREFIX_SIZE;
         }
     } else {
         new_ptr = zmalloc_local(size + MEMKIND_PREFIX_SIZE);
-            uint64_t *is_ram = new_ptr;
+            uint8_t *is_ram = new_ptr;
             *is_ram = 1;
             return (char*)new_ptr + MEMKIND_PREFIX_SIZE;
     }
@@ -284,7 +284,7 @@ void zfree (void* ptr)
 #ifdef USE_MEMKIND
     if(ptr)
     {
-        uint64_t *is_ram = (uint64_t*)((char*)(ptr) - MEMKIND_PREFIX_SIZE);
+        uint8_t *is_ram = (uint8_t*)((char*)(ptr) - MEMKIND_PREFIX_SIZE);
         if(*is_ram) {
             zfree_local(is_ram);
         }else {
