@@ -98,6 +98,9 @@ void zmalloc_init_pmem_functions(void* (*_pmem_malloc)(size_t),
     pmem_free = _pmem_free;
     pmem_realloc = _pmem_realloc;
 }
+uint8_t is_ram(void *ptr) {
+    return *((uint8_t*)((char*)ptr- MEMKIND_PREFIX_SIZE));
+}
 #endif
 
 static void zmalloc_default_oom(size_t size) {

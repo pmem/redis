@@ -429,8 +429,7 @@ void *dupObjectPM(robj* o) {
     if (!o->ptr) return o;
     if (o->encoding == OBJ_ENCODING_INT) return o;
 
-    uint8_t *is_ram = (uint8_t*)((char*)(o->ptr) - MEMKIND_PREFIX_SIZE);
-    if (*is_ram) {
+    if (is_ram(o->ptr)) {
       return o->ptr;
     }
 

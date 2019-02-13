@@ -99,6 +99,7 @@ void *zmemset(void* ptr, int value, size_t num);
 void zmalloc_init_pmem_functions(void* (*_pmem_malloc)(size_t),
                                  void (*_pmem_free)(void*),
                                  void* (*_pmem_realloc)(void*,size_t));
+uint8_t is_ram(void *ptr);
 #endif
 
 #ifdef HAVE_DEFRAG
