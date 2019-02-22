@@ -38,6 +38,7 @@
 #include <limits.h>
 #include "sds.h"
 #include "sdsalloc.h"
+#include <libpmem.h>
 
 const char *SDS_NOINIT = "SDS_NOINIT";
 
@@ -158,7 +159,7 @@ sds sdsnewlenPM(const void *init, size_t initlen) {
     if (init==SDS_NOINIT)
         init = NULL;
     else if (!init)
-        memset(sh, 0, hdrlen+initlen+1);
+        pmem_memset(sh, 0, hdrlen+initlen+1, PMEM_F_MEM_NONTEMPORAL|PMEM_F_MEM_NODRAIN);
     if (sh == NULL) return NULL;
     s = (char*)sh+hdrlen;
     fp = ((unsigned char*)s)-1;
@@ -197,7 +198,7 @@ sds sdsnewlenPM(const void *init, size_t initlen) {
         }
     }
     if (initlen && init)
-        memcpy(s, init, initlen);
+        pmem_memcpy(s, init, initlen, PMEM_F_MEM_NONTEMPORAL|PMEM_F_MEM_NODRAIN);
     s[initlen] = '\0';
     return s;
 }
