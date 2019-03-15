@@ -150,9 +150,10 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
-ifeq ($(PERSISTENT_MALLOC),memkind)
-	FINAL_CFLAGS+= -DUSE_MEMKIND
-	FINAL_LIBS+= -lnuma
+ifeq ($(MALLOC),memkind)
+	DEPENDENCY_TARGETS+= memkind
+	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/include -I../deps/jemalloc/obj/include
+	FINAL_LIBS := ../deps/memkind/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
