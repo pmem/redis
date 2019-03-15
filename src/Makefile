@@ -4,7 +4,7 @@
 #
 # The Makefile composes the final FINAL_CFLAGS and FINAL_LDFLAGS using
 # what is needed for Redis plus the standard CFLAGS and LDFLAGS passed.
-# However when building the dependencies (Jemalloc, Lua, Hiredis, Memkind...)
+# However when building the dependencies (Jemalloc, Lua, Hiredis, ...)
 # CFLAGS and LDFLAGS are propagated to the dependencies, so to pass
 # flags only to be used when compiling / linking Redis itself REDIS_CFLAGS
 # and REDIS_LDFLAGS are used instead (this is the case of 'make gcov').
@@ -29,7 +29,6 @@ endif
 WARN=-Wall -W -Wno-missing-field-initializers
 OPT=$(OPTIMIZATION)
 
-TEST_PMEM_DIR_PATH=/mnt/pmem/
 PREFIX?=/usr/local
 INSTALL_BIN=$(PREFIX)/bin
 INSTALL=install
@@ -151,9 +150,8 @@ ifeq ($(MALLOC),jemalloc)
 endif
 
 ifeq ($(MALLOC),memkind)
-	DEPENDENCY_TARGETS+= memkind
-	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/include -I../deps/jemalloc/obj/include
-	FINAL_LIBS := ../deps/memkind/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
+	FINAL_CFLAGS+= -DUSE_MEMKIND
+	FINAL_LIBS+= -lnuma -lmemkind
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
@@ -270,9 +268,6 @@ distclean: clean
 .PHONY: distclean
 
 test: $(REDIS_SERVER_NAME) $(REDIS_CHECK_AOF_NAME)
-ifeq ($(wildcard $(TEST_PMEM_DIR_PATH)),)
-	$(error pmem directory used in test: $(TEST_PMEM_DIR_PATH) does not exist)
-endif
 	@(cd ..; ./runtest)
 
 test-sentinel: $(REDIS_SENTINEL_NAME)
