@@ -33,9 +33,6 @@
 #include "bio.h"
 #include "latency.h"
 #include "atomicvar.h"
-#ifdef USE_MEMKIND
-#include "memkind_malloc.h"
-#endif
 #include <time.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -4058,9 +4055,6 @@ int main(int argc, char **argv) {
     setlocale(LC_COLLATE,"");
     tzset(); /* Populates 'timezone' global. */
     zmalloc_set_oom_handler(redisOutOfMemoryHandler);
-    #ifdef USE_MEMKIND
-    zmalloc_init_pmem_functions(memkind_alloc_wrapper,memkind_free_wrapper,memkind_realloc_wrapper);
-    #endif
     srand(time(NULL)^getpid());
     gettimeofday(&tv,NULL);
 
@@ -4178,21 +4172,9 @@ int main(int argc, char **argv) {
     server.supervised = redisIsSupervised(server.supervised_mode);
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
+
 #ifdef USE_MEMKIND
-    if (server.pm_dir_path) {
-        int err = memkind_create_pmem(server.pm_dir_path, server.pm_file_size, &server.pmem_kind1);
-        if (err) {
-            perror("memkind_create_pmem()");
-            fprintf(stderr, "Unable to create pmem partition\n");
-            exit(1);
-        } else {
-            printf("memkind created\n");
-        }
-    } else {
-        fprintf(stderr,"Please specify the location for memkind allocations with given size.\n");
-        fprintf(stderr,"Example: ./redis-server --pmdir /mnt/pmem/ 1g\n\n");
-        exit(1);
-    }
+    zmalloc_init_pmem(server.pm_dir_path, server.pm_file_size);
 #endif
 
     initServer();
@@ -4235,7 +4217,7 @@ int main(int argc, char **argv) {
     aeMain(server.el);
     aeDeleteEventLoop(server.el);
 #if defined(USE_MEMKIND)
-    memkind_destroy_kind(server.pmem_kind1);
+    zmalloc_destroy_pmem();
 #endif
     return 0;
 }

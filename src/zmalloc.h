@@ -108,10 +108,10 @@ void *zmemcpy(void* dst, const void* src, size_t num);
 void *zmemset(void* ptr, int value, size_t num);
 
 #ifdef USE_MEMKIND
+#include <memkind.h>
 #define MEMKIND_PREFIX_SIZE 8
-void zmalloc_init_pmem_functions(void* (*_pmem_malloc)(size_t),
-                                 void (*_pmem_free)(void*),
-                                 void* (*_pmem_realloc)(void*,size_t));
+void zmalloc_destroy_pmem();
+void zmalloc_init_pmem(const char* pm_dir_path, size_t pm_file_size);
 #endif
 
 #ifdef HAVE_DEFRAG

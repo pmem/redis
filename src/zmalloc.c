@@ -87,16 +87,20 @@ static size_t used_memory = 0;
 pthread_mutex_t used_memory_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #ifdef USE_MEMKIND
-static void* (*pmem_malloc)(size_t size) = NULL;
-static void (*pmem_free)(void* ptr) = NULL;
-static void* (*pmem_realloc)(void* ptr,size_t size) = NULL;
-void zmalloc_init_pmem_functions(void* (*_pmem_malloc)(size_t),
-                            void (*_pmem_free)(void*),
-                            void* (*_pmem_realloc)(void*,size_t)){
+static struct memkind *pmem_kind;
 
-    pmem_malloc = _pmem_malloc;
-    pmem_free = _pmem_free;
-    pmem_realloc = _pmem_realloc;
+void zmalloc_init_pmem(const char* pm_dir_path, size_t pm_file_size) {
+    int err = memkind_create_pmem(pm_dir_path, pm_file_size, &pmem_kind);
+    if (err) {
+        perror("memkind_create_pmem()");
+        fprintf(stderr, "Unable to create pmem partition\n");
+        exit(1);
+    } else {
+        printf("memkind created\n");
+    }
+}
+void zmalloc_destroy_pmem() {
+    memkind_destroy_kind(pmem_kind);
 }
 #endif
 
@@ -125,7 +129,7 @@ void *zmalloc_local(size_t size) {
 
 void *zmalloc_pmem(size_t size) {
 #ifdef USE_MEMKIND
-    void* ptr = pmem_malloc(size + MEMKIND_PREFIX_SIZE);
+    void *ptr = memkind_malloc(pmem_kind, size + MEMKIND_PREFIX_SIZE);
     uint64_t *is_ram = ptr;
     *is_ram = 0;
     return (void*)((char*)ptr + MEMKIND_PREFIX_SIZE);
@@ -218,17 +222,16 @@ static void *zrealloc_local(void *ptr, size_t size) {
 
 void *zrealloc(void *ptr, size_t size) {
 #ifdef USE_MEMKIND
-    void* new_ptr = NULL;
+    void *new_ptr = NULL;
     if (ptr) {
-        uint64_t *is_ram = (uint64_t*)((char*)(ptr) - MEMKIND_PREFIX_SIZE);
+        uint64_t *is_ram = (uint64_t*) ((char*) (ptr) - MEMKIND_PREFIX_SIZE);
         if(*is_ram) {
-            new_ptr = zrealloc_local((void*)(is_ram), size + MEMKIND_PREFIX_SIZE);
+            new_ptr = zrealloc_local((void*) (is_ram), size + MEMKIND_PREFIX_SIZE);
             uint64_t *is_ram = new_ptr;
             *is_ram = 1;
             return (char*)new_ptr + MEMKIND_PREFIX_SIZE;
-        }
-        else {
-            new_ptr = pmem_realloc((void*)(is_ram), size + MEMKIND_PREFIX_SIZE);
+        } else {
+            new_ptr = memkind_realloc(pmem_kind, (void*) (is_ram), size + MEMKIND_PREFIX_SIZE);
             uint64_t *is_ram = new_ptr;
             *is_ram = 0;
             return (char*)new_ptr + MEMKIND_PREFIX_SIZE;
@@ -282,13 +285,12 @@ static void zfree_local(void *ptr) {
 void zfree (void* ptr)
 {
 #ifdef USE_MEMKIND
-    if(ptr)
-    {
-        uint64_t *is_ram = (uint64_t*)((char*)(ptr) - MEMKIND_PREFIX_SIZE);
+    if(ptr) {
+        uint64_t *is_ram = (uint64_t*)((char*) (ptr) - MEMKIND_PREFIX_SIZE);
         if(*is_ram) {
             zfree_local(is_ram);
-        }else {
-            pmem_free(is_ram);
+        } else {
+            memkind_free(pmem_kind, is_ram);
         }
     }
 #else

@@ -150,9 +150,11 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
-ifeq ($(PERSISTENT_MALLOC),memkind)
+ifeq ($(MALLOC),memkind)
 	FINAL_CFLAGS+= -DUSE_MEMKIND
-	FINAL_LIBS+= -lnuma
+	DEPENDENCY_TARGETS+= memkind
+	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/include -I../deps/jemalloc/obj/include
+	FINAL_LIBS := ../deps/memkind/.libs/libmemkind.a -lnuma $(FINAL_LIBS)
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
@@ -181,10 +183,6 @@ REDIS_BENCHMARK_NAME=redis-benchmark
 REDIS_BENCHMARK_OBJ=ae.o anet.o redis-benchmark.o adlist.o zmalloc.o redis-benchmark.o
 REDIS_CHECK_RDB_NAME=redis-check-rdb
 REDIS_CHECK_AOF_NAME=redis-check-aof
-
-ifeq ($(MALLOC),memkind)
-	REDIS_SERVER_OBJ+= memkind_malloc.o
-endif
 
 all: $(REDIS_SERVER_NAME) $(REDIS_SENTINEL_NAME) $(REDIS_CLI_NAME) $(REDIS_BENCHMARK_NAME) $(REDIS_CHECK_RDB_NAME) $(REDIS_CHECK_AOF_NAME)
 	@echo ""
