@@ -6,7 +6,6 @@ should be provided by the operating system.
 * **hiredis** is the official C client library for Redis. It is used by redis-cli, redis-benchmark and Redis Sentinel. It is part of the Redis official ecosystem but is developed externally from the Redis repository, so we just upgrade it as needed.
 * **linenoise** is a readline replacement. It is developed by the same authors of Redis but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
-* **memkind** is the official memkind 1.8.0 release
 
 How to upgrade the above dependencies
 ===

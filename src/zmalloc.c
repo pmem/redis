@@ -74,8 +74,6 @@ void zlibc_free(void *ptr) {
 #define calloc(count,size) memkind_calloc(MEMKIND_DEFAULT,count,size)
 #define realloc(ptr,size) memkind_realloc(NULL,ptr,size)
 #define free(ptr) memkind_free(NULL,ptr)
-#define mallocx(size,flags) je_mallocx(size,flags)
-#define dallocx(ptr,flags) je_dallocx(ptr,flags)
 #endif
 
 #define update_zmalloc_stat_alloc(__n) do { \
@@ -159,7 +157,7 @@ void *zmalloc_pmem(size_t size) {
     update_zmalloc_stat_alloc(size+PREFIX_SIZE);
     return (char*)ptr+PREFIX_SIZE;
 #endif
- }
+}
 #endif
 
 /* Allocation and free functions that bypass the thread cache
@@ -361,7 +359,7 @@ size_t zmalloc_get_rss(void) {
 }
 #endif
 
-#if defined(USE_JEMALLOC) || defined(USE_MEMKIND)
+#if defined(USE_JEMALLOC)
 int zmalloc_get_allocator_info(size_t *allocated,
                                size_t *active,
                                size_t *resident) {
