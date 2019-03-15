@@ -151,7 +151,6 @@ ifeq ($(MALLOC),jemalloc)
 endif
 
 ifeq ($(MALLOC),memkind)
-	FINAL_CFLAGS+= -DUSE_MEMKIND
 	DEPENDENCY_TARGETS+= memkind
 	FINAL_CFLAGS+= -DUSE_MEMKIND -I../deps/memkind/include -I../deps/jemalloc/obj/include
 	FINAL_LIBS := ../deps/memkind/.libs/libmemkind.a -lnuma $(FINAL_LIBS)

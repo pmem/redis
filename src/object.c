@@ -429,8 +429,7 @@ void *dupObjectPM(robj* o) {
     if (!o->ptr) return o;
     if (o->encoding == OBJ_ENCODING_INT) return o;
 
-    uint64_t *is_ram = (uint64_t*)((char*)(o->ptr) - MEMKIND_PREFIX_SIZE);
-    if (*is_ram) {
+    if(zmalloc_get_location(o->ptr) == DRAM_LOCATION) {
       return o->ptr;
     }
 

@@ -91,7 +91,6 @@
 #endif
 
 void *zmalloc(size_t size);
-void *zmalloc_pmem(size_t size);
 void *zcalloc(size_t size);
 void *zrealloc(void *ptr, size_t size);
 void zfree(void *ptr);
@@ -108,10 +107,15 @@ void *zmemcpy(void* dst, const void* src, size_t num);
 void *zmemset(void* ptr, int value, size_t num);
 
 #ifdef USE_MEMKIND
+#include <errno.h>
 #include <memkind.h>
-#define MEMKIND_PREFIX_SIZE 8
+#define DRAM_LOCATION 0
+#define PMEM_LOCATION 1
+#define WRONG_LOCATION 2
+int zmalloc_get_location (void * ptr);
 void zmalloc_destroy_pmem();
 void zmalloc_init_pmem(const char* pm_dir_path, size_t pm_file_size);
+void *zmalloc_pmem(size_t size);
 #endif
 
 #ifdef HAVE_DEFRAG

@@ -62,11 +62,18 @@ void zlibc_free(void *ptr) {
 #define calloc(count,size) tc_calloc(count,size)
 #define realloc(ptr,size) tc_realloc(ptr,size)
 #define free(ptr) tc_free(ptr)
-#elif defined(USE_JEMALLOC) || defined(USE_MEMKIND)
+#elif defined(USE_JEMALLOC)
 #define malloc(size) je_malloc(size)
 #define calloc(count,size) je_calloc(count,size)
 #define realloc(ptr,size) je_realloc(ptr,size)
 #define free(ptr) je_free(ptr)
+#define mallocx(size,flags) je_mallocx(size,flags)
+#define dallocx(ptr,flags) je_dallocx(ptr,flags)
+#elif defined(USE_MEMKIND)
+#define malloc(size) memkind_malloc(MEMKIND_DEFAULT,size)
+#define calloc(count,size) memkind_calloc(MEMKIND_DEFAULT,count,size)
+#define realloc(ptr,size) memkind_realloc(NULL,ptr,size)
+#define free(ptr) memkind_free(NULL,ptr)
 #define mallocx(size,flags) je_mallocx(size,flags)
 #define dallocx(ptr,flags) je_dallocx(ptr,flags)
 #endif
@@ -88,9 +95,20 @@ pthread_mutex_t used_memory_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #ifdef USE_MEMKIND
 static struct memkind *pmem_kind;
+int zmalloc_get_location (void * ptr)
+{
+    struct memkind *temp_kind = memkind_detect_kind(ptr);
+    ///TODO only for validation function should return 0/1
+    if(!temp_kind) {
+        return WRONG_LOCATION;
+    } else if( temp_kind == MEMKIND_DEFAULT ) {
+        return DRAM_LOCATION;
+    } else {
+        return PMEM_LOCATION;
+    }
+}
 
-void zmalloc_init_pmem(const char* pm_dir_path, size_t pm_file_size) {
-    int err = memkind_create_pmem(pm_dir_path, pm_file_size, &pmem_kind);
+void zmalloc_init_pmem(const char* pm_dir_path, size_t pm_file_size) {   int err = memkind_create_pmem(pm_dir_path, pm_file_size, &pmem_kind);
     if (err) {
         perror("memkind_create_pmem()");
         fprintf(stderr, "Unable to create pmem partition\n");
@@ -113,10 +131,13 @@ static void zmalloc_default_oom(size_t size) {
 
 static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
-void *zmalloc_local(size_t size) {
+void *zmalloc(size_t size) {
     void *ptr = malloc(size+PREFIX_SIZE);
-
+#ifdef USE_MEMKIND
+    if ((!ptr)&&(errno==ENOMEM)) zmalloc_oom_handler(size);
+#else
     if (!ptr) zmalloc_oom_handler(size);
+#endif
 #ifdef HAVE_MALLOC_SIZE
     update_zmalloc_stat_alloc(zmalloc_size(ptr));
     return ptr;
@@ -126,28 +147,20 @@ void *zmalloc_local(size_t size) {
     return (char*)ptr+PREFIX_SIZE;
 #endif
 }
-
+#ifdef USE_MEMKIND
 void *zmalloc_pmem(size_t size) {
-#ifdef USE_MEMKIND
-    void *ptr = memkind_malloc(pmem_kind, size + MEMKIND_PREFIX_SIZE);
-    uint64_t *is_ram = ptr;
-    *is_ram = 0;
-    return (void*)((char*)ptr + MEMKIND_PREFIX_SIZE);
+    void *ptr = memkind_malloc(pmem_kind, size+PREFIX_SIZE);
+    if ((!ptr)&&(errno==ENOMEM)) zmalloc_oom_handler(size);
+#ifdef HAVE_MALLOC_SIZE
+    update_zmalloc_stat_alloc(zmalloc_size(ptr));
+    return ptr;
 #else
-    return zmalloc_local(size);
+    *((size_t*)ptr) = size;
+    update_zmalloc_stat_alloc(size+PREFIX_SIZE);
+    return (char*)ptr+PREFIX_SIZE;
 #endif
-}
-
-void *zmalloc(size_t size) {
-#ifdef USE_MEMKIND
-    void* ptr = zmalloc_local(size + MEMKIND_PREFIX_SIZE);
-    uint64_t *is_ram = ptr;
-    *is_ram = 1;
-    return (void*)((char*)ptr + MEMKIND_PREFIX_SIZE);
-#else
-    return zmalloc_local(size);
+ }
 #endif
-}
 
 /* Allocation and free functions that bypass the thread cache
  * and go straight to the allocator arena bins.
@@ -167,7 +180,7 @@ void zfree_no_tcache(void *ptr) {
 }
 #endif
 
-static void *zcalloc_local(size_t size) {
+void *zcalloc(size_t size) {
     void *ptr = calloc(1, size+PREFIX_SIZE);
 
     if (!ptr) zmalloc_oom_handler(size);
@@ -181,17 +194,7 @@ static void *zcalloc_local(size_t size) {
 #endif
 }
 
-void *zcalloc(size_t size) {
-#ifdef USE_MEMKIND
-    void* ptr = zcalloc_local(size + MEMKIND_PREFIX_SIZE);
-    uint64_t *is_ram = ptr;
-    *is_ram = 1;
-    return (void*)((char*)ptr + MEMKIND_PREFIX_SIZE);
-#else
-    return zcalloc_local(size);
-#endif
-}
-static void *zrealloc_local(void *ptr, size_t size) {
+void *zrealloc(void *ptr, size_t size) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
 #endif
@@ -220,33 +223,6 @@ static void *zrealloc_local(void *ptr, size_t size) {
 #endif
 }
 
-void *zrealloc(void *ptr, size_t size) {
-#ifdef USE_MEMKIND
-    void *new_ptr = NULL;
-    if (ptr) {
-        uint64_t *is_ram = (uint64_t*) ((char*) (ptr) - MEMKIND_PREFIX_SIZE);
-        if(*is_ram) {
-            new_ptr = zrealloc_local((void*) (is_ram), size + MEMKIND_PREFIX_SIZE);
-            uint64_t *is_ram = new_ptr;
-            *is_ram = 1;
-            return (char*)new_ptr + MEMKIND_PREFIX_SIZE;
-        } else {
-            new_ptr = memkind_realloc(pmem_kind, (void*) (is_ram), size + MEMKIND_PREFIX_SIZE);
-            uint64_t *is_ram = new_ptr;
-            *is_ram = 0;
-            return (char*)new_ptr + MEMKIND_PREFIX_SIZE;
-        }
-    } else {
-        new_ptr = zmalloc_local(size + MEMKIND_PREFIX_SIZE);
-            uint64_t *is_ram = new_ptr;
-            *is_ram = 1;
-            return (char*)new_ptr + MEMKIND_PREFIX_SIZE;
-    }
-#else
-    return zrealloc_local(ptr,size);
-#endif
-}
-
 /* Provide zmalloc_size() for systems where this function is not provided by
  * malloc itself, given that in that case we store a header with this
  * information as the first bytes of every allocation. */
@@ -264,7 +240,7 @@ size_t zmalloc_usable(void *ptr) {
 }
 #endif
 
-static void zfree_local(void *ptr) {
+void zfree(void *ptr) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
     size_t oldsize;
@@ -279,22 +255,6 @@ static void zfree_local(void *ptr) {
     oldsize = *((size_t*)realptr);
     update_zmalloc_stat_free(oldsize+PREFIX_SIZE);
     free(realptr);
-#endif
-}
-
-void zfree (void* ptr)
-{
-#ifdef USE_MEMKIND
-    if(ptr) {
-        uint64_t *is_ram = (uint64_t*)((char*) (ptr) - MEMKIND_PREFIX_SIZE);
-        if(*is_ram) {
-            zfree_local(is_ram);
-        } else {
-            memkind_free(pmem_kind, is_ram);
-        }
-    }
-#else
-    zfree_local(ptr);
 #endif
 }
 
