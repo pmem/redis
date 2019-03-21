@@ -94,6 +94,10 @@ To compile against jemalloc on Mac OS X systems, use:
 
     % make MALLOC=jemalloc
 
+To compile against memkind malloc, use:
+
+    % make MALLOC=memkind
+
 Verbose build
 -------------
 
