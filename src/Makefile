@@ -151,7 +151,7 @@ endif
 
 ifeq ($(MALLOC),memkind)
 	FINAL_CFLAGS+= -DUSE_MEMKIND
-	FINAL_LIBS+= -lnuma -lmemkind
+	FINAL_LIBS+= -lmemkind
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
