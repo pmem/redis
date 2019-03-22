@@ -56,7 +56,7 @@
 #endif
 
 #elif defined(USE_MEMKIND)
-#define ZMALLOC_LIB ("jemalloc-" __xstr(JEMALLOC_VERSION_MAJOR) "." __xstr(JEMALLOC_VERSION_MINOR) "." __xstr(JEMALLOC_VERSION_BUGFIX))
+#define ZMALLOC_LIB "memkind"
 #include <memkind.h>
 #define HAVE_MALLOC_SIZE 1
 #define zmalloc_size(p) memkind_malloc_usable_size(NULL,p)
