@@ -4174,7 +4174,9 @@ int main(int argc, char **argv) {
     if (background) daemonize();
 
 #ifdef USE_MEMKIND
-    zmalloc_init_pmem(server.pm_dir_path, server.pm_file_size);
+    if (!server.sentinel_mode) {
+        zmalloc_init_pmem(server.pm_dir_path, server.pm_file_size);
+    }
 #endif
 
     initServer();
