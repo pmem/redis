@@ -49,6 +49,7 @@ set ::all_tests {
     unit/pubsub
     unit/slowlog
     unit/scripting
+    unit/maxmemory
     unit/introspection
     unit/introspection-2
     unit/limits
@@ -56,13 +57,12 @@ set ::all_tests {
     unit/bitops
     unit/bitfield
     unit/geo
+    unit/memefficiency
     unit/hyperloglog
     unit/lazyfree
     unit/wait
     unit/pendingquerybuf
 }
-# unit/memefficiency
-# unit/maxmemory
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
 
