@@ -28,27 +28,16 @@ LABEL maintainer="katarzyna.wasiuta@intel.com"
 
 # Update the dnf cache and install basic tools
 RUN dnf update -y && dnf install -y \
-    autoconf \
-    automake \
     gcc \
-    libtool \
     make \
     numactl-devel \
     && dnf clean all 
 
 # Install memkind
 # TODO: Change url to fedora-29 rpm after memkind official release
-ENV MEMKIND_URL="https://github.com/memkind/memkind/tarball/master"
-RUN mkdir -p memkind && \
-    cd memkind && \
-    curl -L $MEMKIND_URL | tar xz --strip-components=1 -C . && \
-    ./build_jemalloc.sh && \
-    ./autogen.sh && \
-    ./configure --prefix=/usr && \
-    make -j "$(nproc --all)" && \
-    make install && \
-    cd .. && \
-    rm -r memkind
+ENV MEMKIND_URL="http://download.opensuse.org/repositories/home:/mbiesek/Fedora_29/x86_64/memkind-1.9.0-2.1.x86_64.rpm"
+ENV MEMKIND_DEVEL_URL="http://download.opensuse.org/repositories/home:/mbiesek/Fedora_29/x86_64/memkind-devel-1.9.0-2.1.x86_64.rpm"
+RUN rpm -i $MEMKIND_URL && rpm -i $MEMKIND_DEVEL_URL 
 
 # Install redis from copy-on-write poc branch
 # TODO: Change url to 5.0-poc_cow tag
