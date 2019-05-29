@@ -2440,6 +2440,7 @@ void call(client *c, int flags) {
           redisDb *db = c->db;
           if (lookupKeyWrite(db, key) != NULL) {
               dictEntry *de = dictFind(db->dict,key->ptr);
+              serverAssertWithInfo(NULL,key,de != NULL);
               robj *val = dictGetVal(de);
               void *pmem_addr = dupObjectPM(val);
               freeContentAsync(pmem_addr);
