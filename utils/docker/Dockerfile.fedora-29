@@ -29,6 +29,7 @@ LABEL maintainer="katarzyna.wasiuta@intel.com"
 # Update the dnf cache and install basic tools
 RUN dnf update -y && dnf install -y \
     gcc \
+    hostname \
     make \
     numactl-devel \
     && dnf clean all 
