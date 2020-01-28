@@ -38,7 +38,7 @@ start_server {tags {"memefficiency"}} {
 
 run_solo {defrag} {
 start_server {tags {"defrag"}} {
-    if {[string match {*jemalloc*} [s mem_allocator]]} {
+    if {[string match {*jemalloc*} [s mem_allocator]] || [s mem_allocator] == "memkind"} {
         test "Active defrag" {
             r config set save "" ;# prevent bgsave from interfereing with save below
             r config set hz 100

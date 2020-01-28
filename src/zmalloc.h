@@ -55,6 +55,12 @@
 #error "Newer version of jemalloc required"
 #endif
 
+#elif defined(USE_MEMKIND)
+#define ZMALLOC_LIB "memkind"
+#include <memkind.h>
+#define HAVE_MALLOC_SIZE 1
+#define zmalloc_size(p) memkind_malloc_usable_size(NULL, p)
+
 #elif defined(__APPLE__)
 #include <malloc/malloc.h>
 #define HAVE_MALLOC_SIZE 1
@@ -76,6 +82,9 @@
 #if defined(USE_JEMALLOC) && defined(JEMALLOC_FRAG_HINT)
 #define HAVE_DEFRAG
 #endif
+#if defined(USE_MEMKIND)
+#define HAVE_DEFRAG_MEMKIND
+#endif
 
 void *zmalloc(size_t size);
 void *zcalloc(size_t size);
@@ -92,6 +101,12 @@ size_t zmalloc_get_private_dirty(long pid);
 size_t zmalloc_get_smap_bytes_by_field(char *field, long pid);
 size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
+
+#ifdef USE_MEMKIND
+#include <errno.h>
+#include <memkind.h>
+void *zmalloc_pmem(size_t size);
+#endif
 
 #ifdef HAVE_DEFRAG
 void zfree_no_tcache(void *ptr);
