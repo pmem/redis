@@ -45,10 +45,6 @@
  * pointers are worthwhile moving and which aren't */
 int je_get_defrag_hint(void* ptr, int *bin_util, int *run_util);
 
-/* forward declarations*/
-void defragDictBucketCallback(void *privdata, dictEntry **bucketref);
-dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sds newkey, uint64_t hash, long *defragged);
-
 /* Defrag helper for generic allocations.
  *
  * returns NULL in case the allocatoin wasn't moved.
@@ -78,6 +74,20 @@ void* activeDefragAlloc(void *ptr) {
     zfree_no_tcache(ptr);
     return newptr;
 }
+#endif
+
+#ifdef HAVE_DEFRAG_MEMKIND
+void* activeDefragAlloc(void *ptr) {
+  void* new = memkind_defrag_reallocate(NULL,ptr);
+  if (!new) server.stat_active_defrag_misses++;
+  return new;
+}
+#endif
+
+#if defined(HAVE_DEFRAG) || defined(HAVE_DEFRAG_MEMKIND)
+/* forward declarations*/
+void defragDictBucketCallback(void *privdata, dictEntry **bucketref);
+dictEntry* replaceSateliteDictKeyPtrAndOrDefragDictEntry(dict *d, sds oldkey, sds newkey, uint64_t hash, long *defragged);
 
 /*Defrag helper for sds strings
  *
