@@ -69,6 +69,11 @@ void zlibc_free(void *ptr) {
 #define free(ptr) je_free(ptr)
 #define mallocx(size,flags) je_mallocx(size,flags)
 #define dallocx(ptr,flags) je_dallocx(ptr,flags)
+#elif defined(USE_MEMKIND)
+#define malloc(size) memkind_malloc(MEMKIND_DEFAULT,size)
+#define calloc(count,size) memkind_calloc(MEMKIND_DEFAULT,count,size)
+#define realloc(ptr,size) memkind_realloc(NULL,ptr,size)
+#define free(ptr) memkind_free(NULL,ptr)
 #endif
 
 #define update_zmalloc_stat_alloc(__n) do { \
@@ -97,8 +102,11 @@ static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
 void *zmalloc(size_t size) {
     void *ptr = malloc(size+PREFIX_SIZE);
-
+#ifdef USE_MEMKIND
+    if (!ptr && errno==ENOMEM) zmalloc_oom_handler(size);
+#else
     if (!ptr) zmalloc_oom_handler(size);
+#endif
 #ifdef HAVE_MALLOC_SIZE
     update_zmalloc_stat_alloc(zmalloc_size(ptr));
     return ptr;
@@ -108,6 +116,20 @@ void *zmalloc(size_t size) {
     return (char*)ptr+PREFIX_SIZE;
 #endif
 }
+#ifdef USE_MEMKIND
+void *zmalloc_pmem(size_t size) {
+    void *ptr = memkind_malloc(MEMKIND_DAX_KMEM, size+PREFIX_SIZE);
+    if (!ptr && errno==ENOMEM) zmalloc_oom_handler(size);
+#ifdef HAVE_MALLOC_SIZE
+    update_zmalloc_stat_alloc(zmalloc_size(ptr));
+    return ptr;
+#else
+    *((size_t*)ptr) = size;
+    update_zmalloc_stat_alloc(size+PREFIX_SIZE);
+    return (char*)ptr+PREFIX_SIZE;
+#endif
+}
+#endif
 
 /* Allocation and free functions that bypass the thread cache
  * and go straight to the allocator arena bins.
@@ -367,6 +389,26 @@ int jemalloc_purge() {
             return 0;
     }
     return -1;
+}
+#elif defined(USE_MEMKIND)
+int zmalloc_get_allocator_info(size_t *allocated,
+                               size_t *active,
+                               size_t *resident) {
+    memkind_update_cached_stats();
+    memkind_get_stat(NULL, MEMKIND_STAT_TYPE_RESIDENT, resident);
+    memkind_get_stat(NULL, MEMKIND_STAT_TYPE_ACTIVE, active);
+    memkind_get_stat(NULL, MEMKIND_STAT_TYPE_ALLOCATED, allocated);
+    return 1;
+}
+
+void set_jemalloc_bg_thread(int enable) {
+    //TODO MEMKIND_BACKGROUND_THREAD_LIMIT ?
+    ((void)(enable));
+}
+
+int jemalloc_purge() {
+    //TODO extend memkind API?
+    return 0;
 }
 
 #else
