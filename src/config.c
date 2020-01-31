@@ -98,6 +98,23 @@ configEnum repl_diskless_load_enum[] = {
     {NULL, 0}
 };
 
+configEnum pmem_str_mode_enum[] = {
+    {"none", PMEM_NONE},
+    {"str-val", PMEM_STR_VAL},
+    {"str-val-robj", PMEM_STR_VAL_ROBJ},
+    {"str-val-key", PMEM_STR_VAL_KEY},
+    {"str-val-dictentry", PMEM_STR_VAL_DICTENTRY},
+    {"str-val-robj-key", PMEM_STR_VAL_ROBJ_KEY},
+    {"str-val-robj-dictentry", PMEM_STR_VAL_ROBJ_DICTENTRY},
+    {"str-val-key-dictentry", PMEM_STR_VAL_KEY_DICTENTRY},
+    {"str-all", PMEM_STR_ALL},
+    {"embstr-robjval", PMEM_EMBSTR_ROBJVAL},
+    {"embstr-robjval-key", PMEM_EMBSTR_ROBJVAL_KEY},
+    {"embstr-robjval-dictentry", PMEM_EMBSTR_ROBJVAL_DICTENTRY},
+    {"embstr-all", PMEM_EMBSTR_ALL},
+    {NULL, 0}
+};
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0}, /* normal */
@@ -2192,6 +2209,7 @@ standardConfig configs[] = {
     createEnumConfig("loglevel", NULL, MODIFIABLE_CONFIG, loglevel_enum, server.verbosity, LL_NOTICE, NULL, NULL),
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, server.maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),
+    createEnumConfig("pmem-str-mode", NULL, MODIFIABLE_CONFIG, pmem_str_mode_enum, server.pmem_str_mode, PMEM_NONE, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
