@@ -503,6 +503,12 @@ robj *tryObjectEncoding(robj *o) {
      * OBJ_ENCODING_EMBSTR_SIZE_LIMIT. */
     trimStringObjectIfNeeded(o);
 
+#ifdef USE_MEMKIND
+    if (server.pmem_str_mode && PMEM_STR_VAL) {
+        /* Move sds to PM */
+        o->ptr = moveSdsToPM(o->ptr);
+    }
+#endif
     /* Return the original object. */
     return o;
 }
