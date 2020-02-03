@@ -2046,6 +2046,19 @@ static int isValidAOFfilename(char *val, char **err) {
     return 1;
 }
 
+static int isValidPmemStrMode(int val, char **err) {
+#ifndef USE_MEMKIND
+    if (val) {
+        *err = "Persistent memory string mode requires a Redis server compiled with a memkind ";
+        return 0;
+    }
+#else
+    UNUSED(val);
+    UNUSED(err);
+#endif
+    return 1;
+}
+
 static int updateHZ(long long val, long long prev, char **err) {
     UNUSED(prev);
     UNUSED(err);
@@ -2209,7 +2222,7 @@ standardConfig configs[] = {
     createEnumConfig("loglevel", NULL, MODIFIABLE_CONFIG, loglevel_enum, server.verbosity, LL_NOTICE, NULL, NULL),
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, server.maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),
-    createEnumConfig("pmem-str-mode", NULL, MODIFIABLE_CONFIG, pmem_str_mode_enum, server.pmem_str_mode, PMEM_NONE, NULL, NULL),
+    createEnumConfig("pmem-str-mode", NULL, MODIFIABLE_CONFIG, pmem_str_mode_enum, server.pmem_str_mode, PMEM_NONE, isValidPmemStrMode, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
