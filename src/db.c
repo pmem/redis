@@ -177,7 +177,11 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  *
  * The program is aborted if the key already exists. */
 void dbAdd(redisDb *db, robj *key, robj *val) {
-    sds copy = sdsdup(key->ptr);
+    sds copy;
+    if (server.pmem_str_mode & PMEM_STR_VAL_KEY)
+        copy = sdsdupPM(key->ptr);
+    else
+        copy = sdsdup(key->ptr);
     int retval = dictAdd(db->dict, copy, val);
 
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
