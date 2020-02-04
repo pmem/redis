@@ -226,10 +226,24 @@ sds moveSdsToPM(sds s) {
     sdsfree(s);
     return new;
 }
+
+/* Duplicate an sds string to PM. */
+sds sdsdupPM(const sds s) {
+    return sdsnewlenPM(s, sdslen(s));
+}
+
 #else
 sds moveSdsToPM(sds s) {
     (void)(s);
     printf("ERROR: moveSdsToPM is supported only by memkind\n");
+    exit(1);
+     /* unreachable */
+    return NULL;
+}
+
+sds sdsdupPM(const sds s) {
+    (void)(s);
+    printf("ERROR: sdsdupPM is supported only by memkind\n");
     exit(1);
      /* unreachable */
     return NULL;
