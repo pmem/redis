@@ -226,6 +226,14 @@ sds moveSdsToPM(sds s) {
     sdsfree(s);
     return new;
 }
+#else
+sds moveSdsToPM(sds s) {
+    (void)s;
+    printf("ERROR: moveSdsToPM is supported only by memkind\n");
+    exit(1);
+     /* unreachable */
+    return NULL;
+}
 #endif
 
 /* Free an sds string. No operation is performed if 's' is NULL. */
