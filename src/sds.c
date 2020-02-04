@@ -228,7 +228,7 @@ sds moveSdsToPM(sds s) {
 }
 #else
 sds moveSdsToPM(sds s) {
-    (void)s;
+    (void)(s);
     printf("ERROR: moveSdsToPM is supported only by memkind\n");
     exit(1);
      /* unreachable */
