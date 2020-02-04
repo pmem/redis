@@ -95,6 +95,7 @@ start_server {tags {"introspection"}} {
             bind
             requirepass
             pmem-str-mode
+            keys-on-pmem
         }
 
         set configs {}
