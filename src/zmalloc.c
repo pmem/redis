@@ -95,6 +95,12 @@ static void zmalloc_pmem_not_available(void) {
 #define realloc_pmem(ptr,size) NULL; zmalloc_pmem_not_available();
 #endif
 
+#ifdef DISABLE_ALLOC_STATS
+#define update_zmalloc_stat_alloc(__n)
+#define update_zmalloc_pmem_stat_alloc(__n)
+#define update_zmalloc_stat_free(__n)
+#define update_zmalloc_pmem_stat_free(__n)
+#else
 #define update_zmalloc_stat_alloc(__n) do { \
     size_t _n = (__n); \
     if (_n&(sizeof(long)-1)) _n += sizeof(long)-(_n&(sizeof(long)-1)); \
@@ -118,6 +124,7 @@ static void zmalloc_pmem_not_available(void) {
     if (_n&(sizeof(long)-1)) _n += sizeof(long)-(_n&(sizeof(long)-1)); \
     atomicDecr(used_pmem_memory,__n); \
 } while(0)
+#endif
 
 static size_t used_memory = 0;
 static size_t used_pmem_memory = 0;

@@ -181,7 +181,7 @@ endif
 
 ifeq ($(MALLOC),jemalloc)
 	DEPENDENCY_TARGETS+= jemalloc
-	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
+	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include -DDISABLE_ALLOC_STATS
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
@@ -192,7 +192,7 @@ ifeq ($(BUILD_TLS),yes)
 endif
 
 ifeq ($(MALLOC),memkind)
-	FINAL_CFLAGS+= -DUSE_MEMKIND
+	FINAL_CFLAGS+= -DUSE_MEMKIND -DDISABLE_ALLOC_STATS
 	FINAL_LIBS+= -lmemkind -ldaxctl
 endif
 
