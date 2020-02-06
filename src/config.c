@@ -102,10 +102,7 @@ configEnum pmem_str_mode_enum[] = {
     {"none", PMEM_NONE},
     {"str-val", PMEM_STR_VAL},
     {"str-val-robj", PMEM_STR_VAL_ROBJ},
-    {"str-val-dictentry", PMEM_STR_VAL_DICTENTRY},
-    {"str-val-robj-dictentry", PMEM_STR_VAL_ROBJ_DICTENTRY},
     {"embstr-robjval", PMEM_EMBSTR_ROBJVAL},
-    {"embstr-robjval-dictentry", PMEM_EMBSTR_ROBJVAL_DICTENTRY},
     {NULL, 0}
 };
 
@@ -2053,6 +2050,19 @@ static int isValidKeysOnPmem(int val, char **err) {
     return 1;
 }
 
+static int isValidDictEntriesOnPmem(int val, char **err) {
+#ifndef USE_MEMKIND
+    if (val) {
+        *err = "Persistent memory dict entries on PMEM requires a Redis server compiled with a memkind ";
+        return 0;
+    }
+#else
+    UNUSED(val);
+    UNUSED(err);
+#endif
+    return 1;
+}
+
 static int isValidPmemStrMode(int val, char **err) {
 #ifndef USE_MEMKIND
     if (val) {
@@ -2209,6 +2219,7 @@ standardConfig configs[] = {
     createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG, server.aof_enabled, 0, NULL, updateAppendonly),
     createBoolConfig("cluster-allow-reads-when-down", NULL, MODIFIABLE_CONFIG, server.cluster_allow_reads_when_down, 0, NULL, NULL),
     createBoolConfig("keys-on-pmem", NULL, IMMUTABLE_CONFIG, server.keys_on_pmem, 0, isValidKeysOnPmem, NULL),
+    createBoolConfig("dict-entries-on-pmem", NULL, IMMUTABLE_CONFIG, server.dict_entries_on_pmem, 0, isValidDictEntriesOnPmem, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
