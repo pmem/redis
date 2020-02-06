@@ -264,7 +264,7 @@ static void _dictRehashStep(dict *d) {
 /* Add an element to the target hash table */
 int dictAdd(dict *d, void *key, void *val)
 {
-    dictEntry *entry = dictAddRaw(d,key,NULL);
+    dictEntry *entry = dictAddRaw(d,key,NULL,0);
 
     if (!entry) return DICT_ERR;
     dictSetVal(d, entry, val);
@@ -289,7 +289,7 @@ int dictAdd(dict *d, void *key, void *val)
  *
  * If key was added, the hash entry is returned to be manipulated by the caller.
  */
-dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
+dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing, int dictionaryEntriesOnPmem)
 {
     long index;
     dictEntry *entry;
@@ -307,7 +307,10 @@ dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
      * system it is more likely that recently added entries are accessed
      * more frequently. */
     ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
-    entry = zmalloc(sizeof(*entry));
+    if (dictionaryEntriesOnPmem)
+        entry = zmalloc_pmem(sizeof(*entry));
+    else
+        entry = zmalloc(sizeof(*entry));
     entry->next = ht->table[index];
     ht->table[index] = entry;
     ht->used++;
@@ -316,6 +319,29 @@ dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
     dictSetKey(d, entry, key);
     return entry;
 }
+
+#ifdef USE_MEMKIND
+int dictAddPM(dict *d, void *key, void *val)
+{
+    dictEntry *entry = dictAddRaw(d,key,NULL,1);
+
+    if (!entry) return DICT_ERR;
+    dictSetVal(d, entry, val);
+    return DICT_OK;
+}
+
+#else
+int dictAddPM(dict *d, void *key, void *val)
+{
+    (void)(d);
+    (void)(key);
+    (void)(val);
+    printf("ERROR: dictAddPM is supported only by memkind\n");
+    exit(1);
+     /* unreachable */
+    return NULL;
+}
+#endif
 
 /* Add or Overwrite:
  * Add an element, discarding the old value if the key already exists.
@@ -328,7 +354,7 @@ int dictReplace(dict *d, void *key, void *val)
 
     /* Try to add the element. If the key
      * does not exists dictAdd will succeed. */
-    entry = dictAddRaw(d,key,&existing);
+    entry = dictAddRaw(d,key,&existing,0);
     if (entry) {
         dictSetVal(d, entry, val);
         return 1;
@@ -352,9 +378,9 @@ int dictReplace(dict *d, void *key, void *val)
  * existing key is returned.)
  *
  * See dictAddRaw() for more information. */
-dictEntry *dictAddOrFind(dict *d, void *key) {
+dictEntry *dictAddOrFind(dict *d, void *key, int dictionaryEntriesOnPmem) {
     dictEntry *entry, *existing;
-    entry = dictAddRaw(d,key,&existing);
+    entry = dictAddRaw(d,key,&existing,dictionaryEntriesOnPmem);
     return entry ? entry : existing;
 }
 
