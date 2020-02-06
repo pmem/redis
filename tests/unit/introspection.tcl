@@ -96,6 +96,7 @@ start_server {tags {"introspection"}} {
             requirepass
             pmem-str-mode
             keys-on-pmem
+            dict-on-pmem
         }
 
         set configs {}
