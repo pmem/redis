@@ -182,7 +182,11 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
         copy = sdsdupPM(key->ptr);
     else
         copy = sdsdup(key->ptr);
-    int retval = dictAdd(db->dict, copy, val);
+    int retval;
+    if (server.dictionary_entries_on_pmem)
+        retval = dictAddPM(db->dict, copy, val);
+    else
+        retval = dictAdd(db->dict, copy, val);
 
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
     if (val->type == OBJ_LIST ||
@@ -1167,7 +1171,7 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
     /* Reuse the sds from the main dict in the expire dict */
     kde = dictFind(db->dict,key->ptr);
     serverAssertWithInfo(NULL,key,kde != NULL);
-    de = dictAddOrFind(db->expires,dictGetKey(kde));
+    de = dictAddOrFind(db->expires,dictGetKey(kde),server.dictionary_entries_on_pmem);
     dictSetSignedIntegerVal(de,when);
 
     int writable_slave = server.masterhost && server.repl_slave_ro == 0;
