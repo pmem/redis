@@ -355,14 +355,10 @@ typedef long long ustime_t; /* microsecond time type. */
      (PMEM_STR_VAL | PMEM_STR_DICTENTRY) /* String: value and dictentry on PMEM */
 #define PMEM_STR_VAL_ROBJ_DICTENTRY \
      (PMEM_STR_VAL | PMEM_STR_ROBJ | PMEM_STR_DICTENTRY) /* String: value, robj and dictentry on PMEM */
-#define PMEM_STR_ALL \
-     (PMEM_STR_VAL | PMEM_STR_ROBJ | PMEM_STR_DICTENTRY) /* String: value, robj and dictentry on PMEM */
 /* PMEM embedded string option */
 #define PMEM_EMBSTR_ROBJVAL (1<<3) /* Embedded string: robj + value on PMEM */
 #define PMEM_EMBSTR_DICTENTRY (1<<4) /* Embedded string: dictentry on PMEM */
 #define PMEM_EMBSTR_ROBJVAL_DICTENTRY \
-     (PMEM_EMBSTR_ROBJVAL | PMEM_EMBSTR_DICTENTRY) /* Embedded string: robj + value and dictentry on PMEM */
-#define PMEM_EMBSTR_ALL \
      (PMEM_EMBSTR_ROBJVAL | PMEM_EMBSTR_DICTENTRY) /* Embedded string: robj + value and dictentry on PMEM */
 
 /* Replication diskless load defines */

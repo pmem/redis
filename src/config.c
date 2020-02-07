@@ -104,10 +104,8 @@ configEnum pmem_str_mode_enum[] = {
     {"str-val-robj", PMEM_STR_VAL_ROBJ},
     {"str-val-dictentry", PMEM_STR_VAL_DICTENTRY},
     {"str-val-robj-dictentry", PMEM_STR_VAL_ROBJ_DICTENTRY},
-    {"str-all", PMEM_STR_ALL},
     {"embstr-robjval", PMEM_EMBSTR_ROBJVAL},
     {"embstr-robjval-dictentry", PMEM_EMBSTR_ROBJVAL_DICTENTRY},
-    {"embstr-all", PMEM_EMBSTR_ALL},
     {NULL, 0}
 };
 
