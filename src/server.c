@@ -3311,8 +3311,11 @@ void call(client *c, int flags) {
     if (c->cmd->flags & CMD_READONLY) {
         client *caller = (c->flags & CLIENT_LUA && server.lua_caller) ?
                             server.lua_caller : c;
-        if (caller->flags & CLIENT_TRACKING)
+        if (caller->flags & CLIENT_TRACKING &&
+            !(caller->flags & CLIENT_TRACKING_BCAST))
+        {
             trackingRememberKeys(caller);
+        }
     }
 
     server.fixed_time_expire--;
