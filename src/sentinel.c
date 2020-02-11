@@ -3853,7 +3853,7 @@ int sentinelLeaderIncr(dict *counters, char *runid) {
     dictEntry *existing, *de;
     uint64_t oldval;
 
-    de = dictAddRaw(counters,runid,&existing);
+    de = dictAddRaw(counters,runid,&existing,DICT_ENTRIES_ON_DRAM);
     if (existing) {
         oldval = dictGetUnsignedIntegerVal(existing);
         dictSetUnsignedIntegerVal(existing,oldval+1);
