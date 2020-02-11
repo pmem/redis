@@ -40,6 +40,8 @@
 
 #define DICT_OK 0
 #define DICT_ERR 1
+#define DICT_ENTRIES_ON_DRAM 0
+#define DICT_ENTRIES_ON_PMEM 1
 
 /* Unused arguments generate annoying warnings... */
 #define DICT_NOTUSED(V) ((void) V)
@@ -151,8 +153,9 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
 dict *dictCreate(dictType *type, void *privDataPtr);
 int dictExpand(dict *d, unsigned long size);
 int dictAdd(dict *d, void *key, void *val);
-dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing);
-dictEntry *dictAddOrFind(dict *d, void *key);
+int dictAddPM(dict *d, void *key, void *val);
+dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing, int dictionaryEntriesOnPmem);
+dictEntry *dictAddOrFind(dict *d, void *key, int dictionaryEntriesOnPmem);
 int dictReplace(dict *d, void *key, void *val);
 int dictDelete(dict *d, const void *key);
 dictEntry *dictUnlink(dict *ht, const void *key);
