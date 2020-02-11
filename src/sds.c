@@ -161,7 +161,6 @@ sds sdsdup(const sds s) {
     return sdsnewlen(s, sdslen(s));
 }
 
-#ifdef USE_MEMKIND
 /* Create new sds string in PM. It is copy of sdsnewlen.*/
 static sds sdsnewlenPM(const void *init, size_t initlen) {
     void *sh;
@@ -231,24 +230,6 @@ sds moveSdsToPM(sds s) {
 sds sdsdupPM(const sds s) {
     return sdsnewlenPM(s, sdslen(s));
 }
-
-#else
-sds moveSdsToPM(sds s) {
-    (void)(s);
-    printf("ERROR: moveSdsToPM is supported only by memkind\n");
-    exit(1);
-     /* unreachable */
-    return NULL;
-}
-
-sds sdsdupPM(const sds s) {
-    (void)(s);
-    printf("ERROR: sdsdupPM is supported only by memkind\n");
-    exit(1);
-     /* unreachable */
-    return NULL;
-}
-#endif
 
 /* Free an sds string. No operation is performed if 's' is NULL. */
 void sdsfree(sds s) {

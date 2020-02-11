@@ -102,12 +102,7 @@ size_t zmalloc_get_private_dirty(long pid);
 size_t zmalloc_get_smap_bytes_by_field(char *field, long pid);
 size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
-
-#ifdef USE_MEMKIND
-#include <errno.h>
-#include <memkind.h>
 void *zmalloc_pmem(size_t size);
-#endif
 
 #ifdef HAVE_DEFRAG
 void zfree_no_tcache(void *ptr);
