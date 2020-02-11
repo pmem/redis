@@ -73,6 +73,7 @@ void zlibc_free(void *ptr) {
 #define mallocx(size,flags) je_mallocx(size,flags)
 #define dallocx(ptr,flags) je_dallocx(ptr,flags)
 #elif defined(USE_MEMKIND)
+#include <errno.h>
 #define malloc(size) memkind_malloc(MEMKIND_DEFAULT,size)
 #define calloc(count,size) memkind_calloc(MEMKIND_DEFAULT,count,size)
 #define realloc(ptr,size) memkind_realloc(NULL,ptr,size)
@@ -93,6 +94,15 @@ static void zmalloc_pmem_not_available(void) {
 #define free_pmem(ptr) zmalloc_pmem_not_available();
 #define realloc_dram(ptr,size) realloc(ptr,size)
 #define realloc_pmem(ptr,size) NULL; zmalloc_pmem_not_available();
+static int zmalloc_is_pmem(void * ptr) {
+    (void)(ptr);
+    return DRAM_LOCATION;
+}
+void *zmalloc_pmem(size_t size) {
+    (void)(size);
+    zmalloc_pmem_not_available();
+    return NULL;
+}
 #endif
 
 #define update_zmalloc_stat_alloc(__n) do { \
@@ -165,11 +175,6 @@ void *zmalloc_pmem(size_t size) {
     update_zmalloc_pmem_stat_alloc(size+PREFIX_SIZE);
     return (char*)ptr+PREFIX_SIZE;
 #endif
-}
-#else
-static int zmalloc_is_pmem(void * ptr) {
-    (void)(ptr);
-    return DRAM_LOCATION;
 }
 #endif
 
