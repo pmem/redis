@@ -176,7 +176,7 @@ static sds sdsnewlenPM(const void *init, size_t initlen) {
     if (init==SDS_NOINIT)
         init = NULL;
     else if (!init)
-        memset(sh, 0, hdrlen+initlen+1);
+        zmemset_pmem(sh, 0, hdrlen+initlen+1);
     if (sh == NULL) return NULL;
     s = (char*)sh+hdrlen;
     fp = ((unsigned char*)s)-1;
@@ -215,7 +215,7 @@ static sds sdsnewlenPM(const void *init, size_t initlen) {
         }
     }
     if (initlen && init)
-        memcpy(s, init, initlen);
+        zmemcpy_pmem(s, init, initlen);
     s[initlen] = '\0';
     return s;
 }
