@@ -94,11 +94,13 @@ static void zmalloc_pmem_not_available(void) {
 #define free_pmem(ptr) zmalloc_pmem_not_available();
 #define realloc_dram(ptr,size) realloc(ptr,size)
 #define realloc_pmem(ptr,size) NULL; zmalloc_pmem_not_available();
+
 static int zmalloc_is_pmem(void * ptr) {
     (void)(ptr);
     return DRAM_LOCATION;
 }
-void *zmalloc_pmem(size_t size) {
+
+static void *zmalloc_pmem(size_t size) {
     (void)(size);
     zmalloc_pmem_not_available();
     return NULL;
@@ -158,13 +160,14 @@ void *zmalloc(size_t size) {
     return (char*)ptr+PREFIX_SIZE;
 #endif
 }
+
 #ifdef USE_MEMKIND
 static int zmalloc_is_pmem(void * ptr) {
     struct memkind *temp_kind = memkind_detect_kind(ptr);
     return (temp_kind == MEMKIND_DEFAULT) ? DRAM_LOCATION : PMEM_LOCATION;
 }
 
-void *zmalloc_pmem(size_t size) {
+static void *zmalloc_pmem(size_t size) {
     void *ptr = memkind_malloc(MEMKIND_DAX_KMEM, size+PREFIX_SIZE);
     if (!ptr && errno==ENOMEM) zmalloc_oom_handler(size);
 #ifdef HAVE_MALLOC_SIZE
