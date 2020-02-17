@@ -92,10 +92,10 @@ configEnum aof_fsync_enum[] = {
 };
 
 configEnum memory_alloc_policy_enum[] = {
-    {"only-pmem", MEM_POLICY_ONLY_PMEM},
     {"only-dram", MEM_POLICY_ONLY_DRAM},
-    {"mixed-threshold", MEM_POLICY_MIXED_THRESHOLD},
-    {"mixed-ratio", MEM_POLICY_MIXED_RATIO},
+    {"only-pmem", MEM_POLICY_ONLY_PMEM},
+    {"threshold", MEM_POLICY_THRESHOLD},
+    {"ratio", MEM_POLICY_RATIO},
     {NULL, 0}
 };
 
@@ -387,8 +387,8 @@ void loadServerConfigFromString(char *config) {
                 if (dram == 0 || pmem == 0) {
                   err = "Invalid dram-pmem-ratio parameters"; goto loaderr;
                 }
-                server.pmem_ratio.dram_val = dram;
-                server.pmem_ratio.pmem_val = pmem;
+                server.dram_pmem_ratio.dram_val = dram;
+                server.dram_pmem_ratio.pmem_val = pmem;
         } else if (!strcasecmp(argv[0],"dir") && argc == 2) {
             if (chdir(argv[1]) == -1) {
                 serverLog(LL_WARNING,"Can't chdir to '%s': %s",
@@ -534,9 +534,9 @@ void loadServerConfigFromString(char *config) {
         goto loaderr;
     }
 
-    if (server.pmem_ratio.pmem_val == 0 && server.pmem_ratio.dram_val == 0 &&
-        server.memory_alloc_policy == MEM_POLICY_MIXED_RATIO) {
-        err = "dram-pmem-ratio must be defined for mixed-ratio memory allocation policy";
+    if (server.dram_pmem_ratio.pmem_val == 0 && server.dram_pmem_ratio.dram_val == 0 &&
+        server.memory_alloc_policy == MEM_POLICY_RATIO) {
+        err = "dram-pmem-ratio must be defined for ratio memory allocation policy";
         goto loaderr;
     }
 
@@ -891,7 +891,7 @@ void configGetCommand(client *c) {
     }
     if  (stringmatch(pattern,"dram-pmem-ratio",1)) {
         char buf[32];
-        snprintf(buf,sizeof(buf),"%d %d", server.pmem_ratio.dram_val, server.pmem_ratio.pmem_val);
+        snprintf(buf,sizeof(buf),"%d %d", server.dram_pmem_ratio.dram_val, server.dram_pmem_ratio.pmem_val);
         addReplyBulkCString(c,"dram-pmem-ratio");
         addReplyBulkCString(c,buf);
         matches++;
@@ -2069,7 +2069,7 @@ static int updateAppendonly(int val, int prev, char **err) {
 static int updateStaticthreshold(long long val, long long prev, char **err) {
     UNUSED(prev);
     UNUSED(err);
-    if (server.memory_alloc_policy == MEM_POLICY_MIXED_THRESHOLD) {
+    if (server.memory_alloc_policy == MEM_POLICY_THRESHOLD) {
         zmalloc_set_threshold((size_t)val);
     }
 
@@ -2221,9 +2221,9 @@ standardConfig configs[] = {
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
-    createUIntConfig("init-dynamic-threshold", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.init_dynamic_threshold, 64, INTEGER_CONFIG, NULL, NULL),
+    createUIntConfig("initial-dynamic-threshold", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.initial_dynamic_threshold, 64, INTEGER_CONFIG, NULL, NULL),
+    createUIntConfig("dynamic-threshold-min", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.dynamic_threshold_min, 24, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("static-threshold", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.static_threshold, 64, INTEGER_CONFIG, NULL, updateStaticthreshold),
-
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */

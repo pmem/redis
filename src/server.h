@@ -481,8 +481,8 @@ typedef long long ustime_t; /* microsecond time type. */
 /* Memory allocation policy states */
 #define MEM_POLICY_ONLY_DRAM 0          /* only use DRAM */
 #define MEM_POLICY_ONLY_PMEM 1          /* only use PMEM */
-#define MEM_POLICY_MIXED_RATIO 2        /* use DRAM and PMEM ratio variant*/
-#define MEM_POLICY_MIXED_THRESHOLD 3    /* use DRAM and PMEM threshold variant*/
+#define MEM_POLICY_RATIO     2          /* use DRAM and PMEM - ratio variant*/
+#define MEM_POLICY_THRESHOLD 3          /* use DRAM and PMEM - threshold variant*/
 
 struct RedisModule;
 struct RedisModuleIO;
@@ -1340,10 +1340,11 @@ struct redisServer {
     int lfu_decay_time;             /* LFU counter decay factor. */
     long long proto_max_bulk_len;   /* Protocol bulk length maximum size. */
     /* PMEM */
-    int memory_alloc_policy;          /* Policy for memory allocation */
-    unsigned int static_threshold;    /* Persistent Memory static threshold. */
-    unsigned int init_dynamic_threshold;    /* Persistent Memory initial dynamic threshold. */
-    ratioDramPmemConfig pmem_ratio;   /* Persistent Memory ratio. */
+    int memory_alloc_policy;                  /* Policy for memory allocation */
+    unsigned int static_threshold;            /* Persistent Memory static threshold */
+    unsigned int initial_dynamic_threshold;   /* Persistent Memory initial dynamic threshold */
+    unsigned int dynamic_threshold_min;       /* Minimum value of dynamic threshold */
+    ratioDramPmemConfig dram_pmem_ratio;      /* DRAM/Persistent Memory ratio */
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
