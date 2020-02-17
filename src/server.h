@@ -2208,6 +2208,9 @@ uint64_t dictSdsHash(const void *key);
 int dictSdsKeyCompare(void *privdata, const void *key1, const void *key2);
 void dictSdsDestructor(void *privdata, void *val);
 
+/* pmem.c - Handling Persistent Memory */
+void pmemThresholdInit(void);
+
 /* Git SHA1 */
 char *redisGitSHA1(void);
 char *redisGitDirty(void);
