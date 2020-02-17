@@ -2941,6 +2941,7 @@ void initServer(void) {
     scriptingInit(1);
     slowlogInit();
     latencyMonitorInit();
+    zmalloc_set_threshold(server.pmem_threshold);
 }
 
 /* Some steps in server initialization need to be done last (after modules

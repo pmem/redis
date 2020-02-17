@@ -28,6 +28,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -105,6 +106,12 @@ static void *zmalloc_pmem(size_t size) {
     zmalloc_pmem_not_available();
     return NULL;
 }
+
+static void *zcalloc_pmem(size_t size) {
+    (void)(size);
+    zmalloc_pmem_not_available();
+    return NULL;
+}
 #endif
 
 #define update_zmalloc_stat_alloc(__n) do { \
@@ -131,6 +138,7 @@ static void *zmalloc_pmem(size_t size) {
     atomicDecr(used_pmem_memory,__n); \
 } while(0)
 
+static size_t pmem_threshold = UINT_MAX;
 static size_t used_memory = 0;
 static size_t used_pmem_memory = 0;
 pthread_mutex_t used_memory_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -144,7 +152,7 @@ static void zmalloc_default_oom(size_t size) {
 
 static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
-void *zmalloc(size_t size) {
+static void *zmalloc_dram(size_t size) {
     void *ptr = malloc(size+PREFIX_SIZE);
 #ifdef USE_MEMKIND
     if (!ptr && errno==ENOMEM) zmalloc_oom_handler(size);
@@ -179,7 +187,25 @@ static void *zmalloc_pmem(size_t size) {
     return (char*)ptr+PREFIX_SIZE;
 #endif
 }
+
+static void *zcalloc_pmem(size_t size) {
+    void *ptr = memkind_calloc(MEMKIND_DAX_KMEM, 1, size+PREFIX_SIZE);
+
+    if (!ptr && errno==ENOMEM) zmalloc_oom_handler(size);
+#ifdef HAVE_MALLOC_SIZE
+    update_zmalloc_pmem_stat_alloc(zmalloc_size(ptr));
+    return ptr;
+#else
+    *((size_t*)ptr) = size;
+    update_zmalloc_pmem_stat_alloc(size+PREFIX_SIZE);
+    return (char*)ptr+PREFIX_SIZE;
 #endif
+}
+#endif
+
+void *zmalloc(size_t size) {
+    return (size < pmem_threshold) ? zmalloc_dram(size) : zmalloc_pmem(size);
+}
 
 /* Allocation and free functions that bypass the thread cache
  * and go straight to the allocator arena bins.
@@ -199,7 +225,7 @@ void zfree_no_tcache(void *ptr) {
 }
 #endif
 
-void *zcalloc(size_t size) {
+static void *zcalloc_dram(size_t size) {
     void *ptr = calloc(1, size+PREFIX_SIZE);
 
     if (!ptr) zmalloc_oom_handler(size);
@@ -211,6 +237,10 @@ void *zcalloc(size_t size) {
     update_zmalloc_stat_alloc(size+PREFIX_SIZE);
     return (char*)ptr+PREFIX_SIZE;
 #endif
+}
+
+void *zcalloc(size_t size) {
+    return (size < pmem_threshold) ? zcalloc_dram(size) : zcalloc_pmem(size);
 }
 
 void *zrealloc(void *ptr, size_t size) {
@@ -334,6 +364,9 @@ size_t zmalloc_used_pmem_memory(void) {
 
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
     zmalloc_oom_handler = oom_handler;
+}
+void zmalloc_set_threshold(size_t threshold) {
+    pmem_threshold = threshold;
 }
 
 /* Get the RSS information in an OS-specific way.
