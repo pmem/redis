@@ -2090,6 +2090,26 @@ static int updateAppendonly(int val, int prev, char **err) {
     return 1;
 }
 
+static int isValidPmemthreshold(long long  val, char **err) {
+#ifndef USE_MEMKIND
+    if (val != UINT_MAX) {
+        *err = "Persistent memory key on PMEM requires a Redis server compiled with a memkind ";
+        return 0;
+    }
+#else
+    UNUSED(val);
+    UNUSED(err);
+#endif
+    return 1;
+}
+
+static int updatePmemthreshold(long long val, long long prev, char **err) {
+    UNUSED(prev);
+    UNUSED(err);
+    zmalloc_set_threshold((size_t)val);
+    return 1;
+}
+
 static int updateMaxclients(long long val, long long prev, char **err) {
     /* Try to check if the OS is capable of supporting so many FDs. */
     if (val > prev) {
@@ -2229,6 +2249,7 @@ standardConfig configs[] = {
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("pmem-threshold", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.pmem_threshold, UINT_MAX, INTEGER_CONFIG, isValidPmemthreshold, updatePmemthreshold),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */
