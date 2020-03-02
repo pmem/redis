@@ -314,7 +314,7 @@ size_t zmalloc_usable(void *ptr) {
 }
 #endif
 
-void zfree(void *ptr) {
+void zfree_dram(void *ptr) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
     size_t oldsize;
@@ -322,24 +322,40 @@ void zfree(void *ptr) {
 
     if (ptr == NULL) return;
 #ifdef HAVE_MALLOC_SIZE
-    if (!zmalloc_is_pmem(ptr)) {
-        update_zmalloc_stat_free(zmalloc_size(ptr));
-        free_dram(ptr);
-    } else {
-        update_zmalloc_pmem_stat_free(zmalloc_size(ptr));
-        free_pmem(ptr);
-    }
+    update_zmalloc_stat_free(zmalloc_size(ptr));
+    free_dram(ptr);
 #else
     realptr = (char*)ptr-PREFIX_SIZE;
     oldsize = *((size_t*)realptr);
-    if (!zmalloc_is_pmem(ptr)) {
-        update_zmalloc_stat_free(oldsize+PREFIX_SIZE);
-        free_dram(realptr);
-    } else {
-        update_zmalloc_pmem_stat_free(oldsize+PREFIX_SIZE);
-        free_pmem(realptr);
-    }
+    update_zmalloc_stat_free(oldsize+PREFIX_SIZE);
+    free_dram(realptr);
 #endif
+}
+
+static void zfree_pmem(void *ptr) {
+#ifndef HAVE_MALLOC_SIZE
+    void *realptr;
+    size_t oldsize;
+#endif
+
+    if (ptr == NULL) return;
+#ifdef HAVE_MALLOC_SIZE
+    update_zmalloc_pmem_stat_free(zmalloc_size(ptr));
+    free_pmem(ptr);
+#else
+    realptr = (char*)ptr-PREFIX_SIZE;
+    oldsize = *((size_t*)realptr);
+    update_zmalloc_pmem_stat_free(oldsize+PREFIX_SIZE);
+    free_pmem(realptr);
+#endif
+}
+
+void zfree(void *ptr) {
+    if (!zmalloc_is_pmem(ptr)) {
+        zfree_dram(ptr);
+    } else {
+        zfree_pmem(ptr);
+    }
 }
 
 char *zstrdup(const char *s) {
