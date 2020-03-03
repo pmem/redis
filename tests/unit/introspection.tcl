@@ -98,6 +98,7 @@ start_server {tags {"introspection"}} {
             bio_cpulist
             aof_rewrite_cpulist
             bgsave_cpulist
+            dram-pmem-ratio
         }
 
         set configs {}

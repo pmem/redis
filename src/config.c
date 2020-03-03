@@ -91,6 +91,14 @@ configEnum aof_fsync_enum[] = {
     {NULL, 0}
 };
 
+configEnum memory_alloc_policy_enum[] = {
+    {"only-pmem", MEM_POLICY_ONLY_PMEM},
+    {"only-dram", MEM_POLICY_ONLY_DRAM},
+    {"mixed-threshold", MEM_POLICY_MIXED_THRESHOLD},
+    {"mixed-ratio", MEM_POLICY_MIXED_RATIO},
+    {NULL, 0}
+};
+
 configEnum repl_diskless_load_enum[] = {
     {"disabled", REPL_DISKLESS_LOAD_DISABLED},
     {"on-empty-db", REPL_DISKLESS_LOAD_WHEN_DB_EMPTY},
@@ -373,6 +381,14 @@ void loadServerConfigFromString(char *config) {
             } else if (argc == 2 && !strcasecmp(argv[1],"")) {
                 resetServerSaveParams();
             }
+        } else if (!strcasecmp(argv[0],"dram-pmem-ratio") && argc == 3) {
+                int dram = atoi(argv[1]);
+                int pmem = atoi(argv[2]);
+                if (dram == 0 || pmem == 0) {
+                  err = "Invalid dram-pmem-ratio parameters"; goto loaderr;
+                }
+                server.pmem_ratio.dram_val = dram;
+                server.pmem_ratio.pmem_val = pmem;
         } else if (!strcasecmp(argv[0],"dir") && argc == 2) {
             if (chdir(argv[1]) == -1) {
                 serverLog(LL_WARNING,"Can't chdir to '%s': %s",
@@ -721,6 +737,32 @@ void configSetCommand(client *c) {
             server.client_obuf_limits[class].soft_limit_seconds = soft_seconds;
         }
         sdsfreesplitres(v,vlen);
+    } config_set_special_field("dram-pmem-ratio") {
+        int vlen, j;
+        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+        
+        /* We need value length equal 2: <dram_value> <pmem_value>*/
+        if (vlen != 2) {
+            sdsfreesplitres(v,vlen);
+            goto badfmt;
+        }
+         /* Perform sanity check before setting the new config:
+         * - Pmem >= 1, Dram >= 1 */
+        for (j = 0; j < vlen; j++) {
+            char *eptr;
+            long val;
+
+            val = strtoll(v[j], &eptr, 10);
+            if (eptr[0] != '\0' || val < 1) {
+                sdsfreesplitres(v,vlen);
+                goto badfmt;
+            }
+        }
+        server.pmem_ratio.dram_val = strtoll(v[0],NULL,10);
+        server.pmem_ratio.pmem_val = strtoll(v[1],NULL,10);
+
+        sdsfreesplitres(v,vlen);
+    
     } config_set_special_field("notify-keyspace-events") {
         int flags = keyspaceEventsStringToFlags(o->ptr);
 
@@ -865,6 +907,13 @@ void configGetCommand(client *c) {
         addReplyBulkCString(c,"client-output-buffer-limit");
         addReplyBulkCString(c,buf);
         sdsfree(buf);
+        matches++;
+    }
+    if  (stringmatch(pattern,"dram-pmem-ratio",1)) {
+        char buf[32];
+        snprintf(buf,sizeof(buf),"%d %d", server.pmem_ratio.dram_val, server.pmem_ratio.pmem_val);
+        addReplyBulkCString(c,"dram-pmem-ratio");
+        addReplyBulkCString(c,buf);
         matches++;
     }
     if (stringmatch(pattern,"unixsocketperm",1)) {
@@ -2037,6 +2086,27 @@ static int updateAppendonly(int val, int prev, char **err) {
     return 1;
 }
 
+static int updateMemoryallocpolicy(int val, int prev, char **err) {
+    UNUSED(prev);
+    switch(val) {
+        case MEM_POLICY_ONLY_DRAM:
+            zmalloc_set_threshold(UINT_MAX);
+            break;
+        case MEM_POLICY_ONLY_PMEM:
+            zmalloc_set_threshold(0U);
+            break;
+        case MEM_POLICY_MIXED_THRESHOLD:
+            zmalloc_set_threshold(server.pmem_threshold);
+            break;
+        case MEM_POLICY_MIXED_RATIO:
+            break;
+        default:
+            *err = "Unknown memory allocation policy.";
+            return 0;
+    }
+    return 1;
+}
+
 static int isValidPmemthreshold(long long  val, char **err) {
 #ifndef USE_MEMKIND
     if (val != UINT_MAX) {
@@ -2053,7 +2123,10 @@ static int isValidPmemthreshold(long long  val, char **err) {
 static int updatePmemthreshold(long long val, long long prev, char **err) {
     UNUSED(prev);
     UNUSED(err);
-    zmalloc_set_threshold((size_t)val);
+    if (server.memory_alloc_policy == MEM_POLICY_MIXED_THRESHOLD) {
+        zmalloc_set_threshold((size_t)val);
+    }
+
     return 1;
 }
 
@@ -2165,6 +2238,7 @@ standardConfig configs[] = {
     createEnumConfig("loglevel", NULL, MODIFIABLE_CONFIG, loglevel_enum, server.verbosity, LL_NOTICE, NULL, NULL),
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, server.maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),
+    createEnumConfig("memory-alloc-policy", NULL, MODIFIABLE_CONFIG, memory_alloc_policy_enum, server.memory_alloc_policy, MEM_POLICY_ONLY_DRAM, NULL, updateMemoryallocpolicy),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
