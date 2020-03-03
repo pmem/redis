@@ -466,6 +466,12 @@ typedef long long ustime_t; /* microsecond time type. */
 #define REDISMODULE_AUX_BEFORE_RDB (1<<0)
 #define REDISMODULE_AUX_AFTER_RDB (1<<1)
 
+/* DRAM-PMEM policy states */
+#define PMEM_POLICY_DRAM_ONLY        0          /* only use DRAM */
+#define PMEM_POLICY_PMEM_ONLY        1          /* only use PMEM */
+#define PMEM_POLICY_PMEM_RATIO       2          /* use DRAM and PMEM ratio variant*/
+#define PMEM_POLICY_PMEM_THRESHOLD   3          /* use DRAM and PMEM threshold variant*/
+
 struct RedisModule;
 struct RedisModuleIO;
 struct RedisModuleDigest;
@@ -884,6 +890,11 @@ typedef struct clientBufferLimitsConfig {
     time_t soft_limit_seconds;
 } clientBufferLimitsConfig;
 
+typedef struct ratioDramPmemConfig {
+    int pmem_val;
+    int dram_val;
+} ratioDramPmemConfig;
+
 extern clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT];
 
 /* The redisOp structure defines a Redis Operation, that is an instance of
@@ -1300,7 +1311,9 @@ struct redisServer {
     int lfu_decay_time;             /* LFU counter decay factor. */
     long long proto_max_bulk_len;   /* Protocol bulk length maximum size. */
     /* PMEM */
-    unsigned int pmem_threshold;    /* Persistent Memory threshold. */
+    int pmem_memory_policy;                 /* Persistent Memory policy. */
+    unsigned int pmem_threshold;            /* Persistent Memory threshold. */
+    ratioDramPmemConfig pmem_ratio;         /* Persistent Memory ratio. */
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
