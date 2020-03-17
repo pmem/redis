@@ -152,7 +152,7 @@ static void zmalloc_default_oom(size_t size) {
 
 static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
-static void *zmalloc_dram(size_t size) {
+void *zmalloc_dram(size_t size) {
     void *ptr = malloc(size+PREFIX_SIZE);
 #ifdef USE_MEMKIND
     if (!ptr && errno==ENOMEM) zmalloc_oom_handler(size);
