@@ -541,7 +541,7 @@ long long dictFingerprint(dict *d) {
 
 dictIterator *dictGetIterator(dict *d)
 {
-    dictIterator *iter = zmalloc(sizeof(*iter));
+    dictIterator *iter = zmalloc_dram(sizeof(*iter));
 
     iter->d = d;
     iter->table = 0;
@@ -602,7 +602,7 @@ void dictReleaseIterator(dictIterator *iter)
         else
             assert(iter->fingerprint == dictFingerprint(iter->d));
     }
-    zfree(iter);
+    zfree_dram(iter);
 }
 
 /* Return a random entry from the hash table. Useful to
