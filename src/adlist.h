@@ -71,6 +71,7 @@ typedef struct list {
 
 /* Prototypes */
 list *listCreate(void);
+list *listCreateDRAM(void);
 void listRelease(list *list);
 void listEmpty(list *list);
 list *listAddNodeHead(list *list, void *value);
