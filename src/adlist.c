@@ -52,6 +52,25 @@ list *listCreate(void)
     return list;
 }
 
+/* Create a new list on DRAM. The created list can be freed with
+ * AlFreeList(), but private value of every node need to be freed
+ * by the user before to call AlFreeList().
+ *
+ * On error, NULL is returned. Otherwise the pointer to the new list. */
+list *listCreateDRAM(void)
+{
+    struct list *list;
+
+    if ((list = zmalloc_dram(sizeof(*list))) == NULL)
+        return NULL;
+    list->head = list->tail = NULL;
+    list->len = 0;
+    list->dup = NULL;
+    list->free = NULL;
+    list->match = NULL;
+    return list;
+}
+
 /* Remove all the elements from the list without destroying the list itself. */
 void listEmpty(list *list)
 {
