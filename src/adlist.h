@@ -68,9 +68,12 @@ typedef struct list {
 #define listGetDupMethod(l) ((l)->dup)
 #define listGetFreeMethod(l) ((l)->free)
 #define listGetMatchMethod(l) ((l)->match)
+#define LIST_GENERAL_VARIANT  0
+#define LIST_DRAM_VARIANT     1
 
 /* Prototypes */
 list *listCreate(void);
+list *listCreateDRAM(void);
 void listRelease(list *list);
 void listEmpty(list *list);
 list *listAddNodeHead(list *list, void *value);
