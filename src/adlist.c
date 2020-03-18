@@ -33,16 +33,15 @@
 #include "adlist.h"
 #include "zmalloc.h"
 
-/* Create a new list. The created list can be freed with
- * AlFreeList(), but private value of every node need to be freed
- * by the user before to call AlFreeList().
- *
- * On error, NULL is returned. Otherwise the pointer to the new list. */
-list *listCreate(void)
+#define LIST_GENERAL_VARIANT  0
+#define LIST_DRAM_VARIANT     1
+
+static list *_listCreate(int on_dram)
 {
     struct list *list;
 
-    if ((list = zmalloc(sizeof(*list))) == NULL)
+    list = (on_dram == LIST_DRAM_VARIANT) ? zmalloc_dram(sizeof(*list)) : zmalloc(sizeof(*list));
+    if (list == NULL)
         return NULL;
     list->head = list->tail = NULL;
     list->len = 0;
@@ -50,6 +49,24 @@ list *listCreate(void)
     list->free = NULL;
     list->match = NULL;
     return list;
+}
+
+/* Create a new list. The created list can be freed with
+ * AlFreeList(), but private value of every node need to be freed
+ * by the user before to call AlFreeList().
+ *
+ * On error, NULL is returned. Otherwise the pointer to the new list. */
+list *listCreate(void) {
+    return _listCreate(LIST_GENERAL_VARIANT);
+}
+
+/* Create a new list on DRAM. The created list can be freed with
+ * AlFreeList(), but private value of every node need to be freed
+ * by the user before to call AlFreeList().
+ *
+ * On error, NULL is returned. Otherwise the pointer to the new list. */
+list *listCreateDRAM(void) {
+    return _listCreate(LIST_DRAM_VARIANT);
 }
 
 /* Remove all the elements from the list without destroying the list itself. */
