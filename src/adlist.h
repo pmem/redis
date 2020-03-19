@@ -73,6 +73,7 @@ typedef struct list {
 list *listCreate(void);
 list *listCreateDRAM(void);
 void listRelease(list *list);
+void listReleaseDRAM(list *list);
 void listEmpty(list *list);
 void listEmptyDRAM(list *list);
 list *listAddNodeHead(list *list, void *value);
