@@ -133,7 +133,7 @@ client *createClient(connection *conn) {
     c->slave_listening_port = 0;
     c->slave_ip[0] = '\0';
     c->slave_capa = SLAVE_CAPA_NONE;
-    c->reply = listCreate();
+    c->reply = listCreateDRAM();
     c->reply_bytes = 0;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply,freeClientReplyValue);
@@ -148,9 +148,9 @@ client *createClient(connection *conn) {
     c->bpop.numreplicas = 0;
     c->bpop.reploffset = 0;
     c->woff = 0;
-    c->watched_keys = listCreate();
+    c->watched_keys = listCreateDRAM();
     c->pubsub_channels = dictCreate(&objectKeyPointerValueDictType,NULL);
-    c->pubsub_patterns = listCreate();
+    c->pubsub_patterns = listCreateDRAM();
     c->peerid = NULL;
     c->client_list_node = NULL;
     c->client_tracking_redirection = 0;
@@ -1092,16 +1092,16 @@ void freeClient(client *c) {
 
     /* UNWATCH all the keys */
     unwatchAllKeys(c);
-    listRelease(c->watched_keys);
+    listReleaseDRAM(c->watched_keys);
 
     /* Unsubscribe from all the pubsub channels */
     pubsubUnsubscribeAllChannels(c,0);
     pubsubUnsubscribeAllPatterns(c,0);
     dictRelease(c->pubsub_channels);
-    listRelease(c->pubsub_patterns);
+    listReleaseDRAM(c->pubsub_patterns);
 
     /* Free data structures. */
-    listRelease(c->reply);
+    listReleaseDRAM(c->reply);
     freeClientArgv(c);
 
     /* Unlink the client: this will close the socket, remove the I/O

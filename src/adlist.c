@@ -96,6 +96,15 @@ void listRelease(list *list)
     zfree(list);
 }
 
+/* Free the whole list from DRAM.
+ *
+ * This function can't fail. */
+void listReleaseDRAM(list *list)
+{
+    listEmpty(list);
+    zfree_dram(list);
+}
+
 /* Add a new node to the list, to head, containing the specified 'value'
  * pointer as value.
  *
