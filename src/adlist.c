@@ -106,6 +106,21 @@ void listRelease(list *list)
     zfree(list);
 }
 
+/* Free the whole list from DRAM.
+ *
+ * This function can't fail. */
+void listReleaseDRAM(list *list)
+{
+    listEmpty(list);
+    zfree_dram(list);
+}
+
+/* Add a new node to the list, to head, containing the specified 'value'
+ * pointer as value.
+ *
+ * On error, NULL is returned and no operation is performed (i.e. the
+ * list remains unaltered).
+ * On success the 'list' pointer you pass to the function is returned. */
 static list *_listAddNodeHead(list *list, void *value, int on_dram)
 {
     listNode *node;
