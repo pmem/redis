@@ -29,6 +29,13 @@
  */
 #include "server.h"
 
+#include <math.h>
+#include <stdio.h>
+
+#define THRESHOLD_STEP 0.05
+#define THRESHOLD_UP(val)  ((size_t)((1+THRESHOLD_STEP)*val))
+#define THRESHOLD_DOWN(val) ((size_t)((1-THRESHOLD_STEP)*val))
+
 /* Initialize the pmem threshold. */
 void pmemThresholdInit(void)
 {
@@ -47,5 +54,26 @@ void pmemThresholdInit(void)
             break;
         default:
             serverAssert(NULL);
+    }
+}
+
+void adjustPmemThresholdCycle(void) {
+    if (server.memory_alloc_policy == MEM_POLICY_RATIO) {
+        run_with_period(100) {
+            //revert logic to avoid division by zero
+            float setting_state = (float)server.dram_pmem_ratio.pmem_val/server.dram_pmem_ratio.dram_val;
+            float current_state = (float)zmalloc_used_pmem_memory()/zmalloc_used_memory();
+            if (fabs(setting_state-current_state) < 0.1) {
+                return;
+            }
+            size_t threshold = zmalloc_get_threshold();
+            if (setting_state < current_state) {
+                zmalloc_set_threshold(THRESHOLD_UP(threshold));
+            } else {
+                size_t lower_threshold = THRESHOLD_DOWN(threshold);
+                if (lower_threshold < server.dynamic_threshold_min) return;
+                zmalloc_set_threshold(lower_threshold);
+            }
+        }
     }
 }
