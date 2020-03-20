@@ -1698,6 +1698,9 @@ void databasesCron(void) {
         }
     }
 
+    /*Adjust PMEM threshold */
+    adjustPmemThresholdCycle();
+
     /* Defrag keys gradually. */
     activeDefragCycle();
 
