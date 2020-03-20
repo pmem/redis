@@ -29,6 +29,17 @@
  */
 #include "server.h"
 
+#include <math.h>
+#include <stdio.h>
+
+#define THRESHOLD_STEP 0.05
+#define THRESHOLD_UP(val)  ((size_t)ceil((1+THRESHOLD_STEP)*val))
+#define THRESHOLD_DOWN(val) ((size_t)floor((1-THRESHOLD_STEP)*val))
+
+static inline size_t absDiff(size_t a, size_t b) {
+    return a > b ? (a - b) : (b - a);
+}
+
 /* Initialize the pmem threshold. */
 void pmemThresholdInit(void)
 {
@@ -47,5 +58,36 @@ void pmemThresholdInit(void)
             break;
         default:
             serverAssert(NULL);
+    }
+}
+//TODO: modify logic to check the trend of actual Ratio using pmem_checkpoint_value and dram_checkpoint_value
+void adjustPmemThresholdCycle(void) {
+    if (server.memory_alloc_policy == MEM_POLICY_RATIO) {
+        run_with_period(server.ratio_check_period) {
+            size_t pmem_memory = zmalloc_used_pmem_memory();
+            size_t dram_memory = zmalloc_used_memory();
+            size_t total_memory = pmem_memory + dram_memory;
+            size_t total_memory_checkpoint = server.pmem_checkpoint_value + server.dram_checkpoint_value;
+            // do not modify threshold when change in memory usage is too small
+            if (absDiff(total_memory_checkpoint, total_memory) > 100) {
+                //revert logic to avoid division by zero
+                double setting_state = (double)server.dram_pmem_ratio.pmem_val/server.dram_pmem_ratio.dram_val;
+                double current_state = (double)pmem_memory/dram_memory;
+                size_t threshold = zmalloc_get_threshold();
+                if (fabs(setting_state-current_state) > 0.1) {
+                    if (setting_state < current_state) {
+                        size_t higher_threshold = THRESHOLD_UP(threshold);
+                        if (higher_threshold > server.dynamic_threshold_max) return;
+                        zmalloc_set_threshold(higher_threshold);
+                    } else {
+                        size_t lower_threshold = THRESHOLD_DOWN(threshold);
+                        if (lower_threshold < server.dynamic_threshold_min) return;
+                        zmalloc_set_threshold(lower_threshold);
+                    }
+                }
+            }
+            server.pmem_checkpoint_value = pmem_memory;
+            server.dram_checkpoint_value = dram_memory;
+        }
     }
 }
