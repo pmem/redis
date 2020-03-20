@@ -103,6 +103,7 @@ start_server {tags {"introspection"}} {
             initial-dynamic-threshold
             dynamic-threshold-min
             dynamic-threshold-max
+            memory-ratio-cron-period
         }
 
         set configs {}
