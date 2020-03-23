@@ -737,32 +737,6 @@ void configSetCommand(client *c) {
             server.client_obuf_limits[class].soft_limit_seconds = soft_seconds;
         }
         sdsfreesplitres(v,vlen);
-    } config_set_special_field("dram-pmem-ratio") {
-        int vlen, j;
-        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
-        
-        /* We need value length equal 2: <dram_value> <pmem_value>*/
-        if (vlen != 2) {
-            sdsfreesplitres(v,vlen);
-            goto badfmt;
-        }
-         /* Perform sanity check before setting the new config:
-         * - Pmem >= 1, Dram >= 1 */
-        for (j = 0; j < vlen; j++) {
-            char *eptr;
-            long val;
-
-            val = strtoll(v[j], &eptr, 10);
-            if (eptr[0] != '\0' || val < 1) {
-                sdsfreesplitres(v,vlen);
-                goto badfmt;
-            }
-        }
-        server.pmem_ratio.dram_val = strtoll(v[0],NULL,10);
-        server.pmem_ratio.pmem_val = strtoll(v[1],NULL,10);
-
-        sdsfreesplitres(v,vlen);
-    
     } config_set_special_field("notify-keyspace-events") {
         int flags = keyspaceEventsStringToFlags(o->ptr);
 
