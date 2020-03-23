@@ -95,6 +95,7 @@ start_server {tags {"introspection"}} {
             bind
             requirepass
             dram-pmem-ratio
+            memory-alloc-policy
         }
 
         set configs {}
