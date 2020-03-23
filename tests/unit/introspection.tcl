@@ -99,6 +99,7 @@ start_server {tags {"introspection"}} {
             aof_rewrite_cpulist
             bgsave_cpulist
             dram-pmem-ratio
+            memory-alloc-policy
         }
 
         set configs {}

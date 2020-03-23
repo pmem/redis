@@ -2086,27 +2086,6 @@ static int updateAppendonly(int val, int prev, char **err) {
     return 1;
 }
 
-static int updateMemoryallocpolicy(int val, int prev, char **err) {
-    UNUSED(prev);
-    switch(val) {
-        case MEM_POLICY_ONLY_DRAM:
-            zmalloc_set_threshold(UINT_MAX);
-            break;
-        case MEM_POLICY_ONLY_PMEM:
-            zmalloc_set_threshold(0U);
-            break;
-        case MEM_POLICY_MIXED_THRESHOLD:
-            zmalloc_set_threshold(server.pmem_threshold);
-            break;
-        case MEM_POLICY_MIXED_RATIO:
-            break;
-        default:
-            *err = "Unknown memory allocation policy.";
-            return 0;
-    }
-    return 1;
-}
-
 static int isValidPmemthreshold(long long  val, char **err) {
 #ifndef USE_MEMKIND
     if (val != UINT_MAX) {
@@ -2238,7 +2217,7 @@ standardConfig configs[] = {
     createEnumConfig("loglevel", NULL, MODIFIABLE_CONFIG, loglevel_enum, server.verbosity, LL_NOTICE, NULL, NULL),
     createEnumConfig("maxmemory-policy", NULL, MODIFIABLE_CONFIG, maxmemory_policy_enum, server.maxmemory_policy, MAXMEMORY_NO_EVICTION, NULL, NULL),
     createEnumConfig("appendfsync", NULL, MODIFIABLE_CONFIG, aof_fsync_enum, server.aof_fsync, AOF_FSYNC_EVERYSEC, NULL, NULL),
-    createEnumConfig("memory-alloc-policy", NULL, MODIFIABLE_CONFIG, memory_alloc_policy_enum, server.memory_alloc_policy, MEM_POLICY_ONLY_DRAM, NULL, updateMemoryallocpolicy),
+    createEnumConfig("memory-alloc-policy", NULL, IMMUTABLE_CONFIG, memory_alloc_policy_enum, server.memory_alloc_policy, MEM_POLICY_ONLY_DRAM, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
