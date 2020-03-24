@@ -534,6 +534,12 @@ void loadServerConfigFromString(char *config) {
         goto loaderr;
     }
 
+    if (server.pmem_ratio.pmem_val == 0 && server.pmem_ratio.dram_val == 0 &&
+        server.memory_alloc_policy == MEM_POLICY_MIXED_RATIO) {
+        err = "dram-pmem-ratio must be defined for mixed-ratio memory allocation policy";
+        goto loaderr;
+    }
+
     sdsfreesplitres(lines,totlines);
     return;
 
