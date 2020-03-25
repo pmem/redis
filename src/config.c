@@ -2208,6 +2208,7 @@ standardConfig configs[] = {
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
+    createUIntConfig("init-dynamic-threshold", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.init_dynamic_threshold, 64, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("static-threshold", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.static_threshold, 64, INTEGER_CONFIG, NULL, updateStaticthreshold),
 
 
