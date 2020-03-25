@@ -534,10 +534,15 @@ void loadServerConfigFromString(char *config) {
         goto loaderr;
     }
 
-    if (server.dram_pmem_ratio.pmem_val == 0 && server.dram_pmem_ratio.dram_val == 0 &&
-        server.memory_alloc_policy == MEM_POLICY_RATIO) {
-        err = "dram-pmem-ratio must be defined for ratio memory allocation policy";
-        goto loaderr;
+    if (server.memory_alloc_policy == MEM_POLICY_RATIO) {
+        if (server.dynamic_threshold_min > server.initial_dynamic_threshold) {
+            err = "dynamic threshold: initial value must be greater than or equal to minimum value for ratio memory allocation policy";
+            goto loaderr;
+        }
+        if (server.dram_pmem_ratio.pmem_val == 0 && server.dram_pmem_ratio.dram_val == 0) {
+            err = "dram-pmem-ratio must be defined for ratio memory allocation policy";
+            goto loaderr;
+        }
     }
 
     sdsfreesplitres(lines,totlines);
