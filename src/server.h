@@ -1341,7 +1341,7 @@ struct redisServer {
     long long proto_max_bulk_len;   /* Protocol bulk length maximum size. */
     /* PMEM */
     int memory_alloc_policy;          /* Policy for memory allocation */
-    unsigned int pmem_threshold;      /* Persistent Memory threshold. */
+    unsigned int static_threshold;    /* Persistent Memory static threshold. */
     ratioDramPmemConfig pmem_ratio;   /* Persistent Memory ratio. */
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
