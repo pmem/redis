@@ -40,8 +40,10 @@ void pmemThresholdInit(void)
             zmalloc_set_threshold(0U);
             break;
         case MEM_POLICY_MIXED_THRESHOLD:
-        case MEM_POLICY_MIXED_RATIO:
             zmalloc_set_threshold(server.static_threshold);
+            break;
+        case MEM_POLICY_MIXED_RATIO:
+            zmalloc_set_threshold(server.init_dynamic_threshold);
             break;
         default:
             serverAssert(NULL);

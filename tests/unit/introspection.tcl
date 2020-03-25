@@ -100,6 +100,7 @@ start_server {tags {"introspection"}} {
             bgsave_cpulist
             dram-pmem-ratio
             memory-alloc-policy
+            init-dynamic-threshold
         }
 
         set configs {}

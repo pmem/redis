@@ -1342,6 +1342,7 @@ struct redisServer {
     /* PMEM */
     int memory_alloc_policy;          /* Policy for memory allocation */
     unsigned int static_threshold;    /* Persistent Memory static threshold. */
+    unsigned int init_dynamic_threshold;    /* Persistent Memory initial dynamic threshold. */
     ratioDramPmemConfig pmem_ratio;   /* Persistent Memory ratio. */
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
