@@ -1326,6 +1326,8 @@ struct redisServer {
     unsigned int dynamic_threshold_min;       /* Minimum value of dynamic threshold */
     unsigned int dynamic_threshold_max;       /* Maximum value of dynamic threshold */
     ratioDramPmemConfig dram_pmem_ratio;      /* DRAM/Persistent Memory ratio */
+    size_t pmem_checkpoint_value;             /* PMEM utylization in last checkpoint*/
+    size_t dram_checkpoint_value;             /* DRAM utylization in last checkpoint*/
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
