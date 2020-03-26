@@ -381,6 +381,11 @@ size_t zmalloc_used_pmem_memory(void) {
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
     zmalloc_oom_handler = oom_handler;
 }
+
+size_t zmalloc_get_threshold(void) {
+    return pmem_threshold;
+}
+
 void zmalloc_set_threshold(size_t threshold) {
     pmem_threshold = threshold;
 }
