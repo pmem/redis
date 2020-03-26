@@ -4090,6 +4090,7 @@ sds genRedisInfoString(const char *section) {
         size_t zmalloc_used = zmalloc_used_memory();
         size_t zmalloc_pmem_used = zmalloc_used_pmem_memory();
         size_t total_system_mem = server.system_memory_size;
+        size_t pmem_threshold = zmalloc_get_threshold();
         const char *evict_policy = evictPolicyToString();
         long long memory_lua = server.lua ? (long long)lua_gc(server.lua,LUA_GCCOUNT,0)*1024 : 0;
         struct redisMemOverhead *mh = getMemoryOverheadData();
@@ -4124,6 +4125,7 @@ sds genRedisInfoString(const char *section) {
             "used_memory_startup:%zu\r\n"
             "used_memory_dataset:%zu\r\n"
             "used_memory_dataset_perc:%.2f%%\r\n"
+            "pmem_threshold:%zu\r\n"
             "used_memory_pmem:%zu\r\n"
             "used_memory_pmem_human:%s\r\n"
             "allocator_allocated:%zu\r\n"
@@ -4166,6 +4168,7 @@ sds genRedisInfoString(const char *section) {
             mh->startup_allocated,
             mh->dataset,
             mh->dataset_perc,
+            pmem_threshold,
             zmalloc_pmem_used,
             hmem_pmem,
             server.cron_malloc_stats.allocator_allocated,
