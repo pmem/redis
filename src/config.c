@@ -535,6 +535,10 @@ void loadServerConfigFromString(char *config) {
             err = "dynamic threshold: initial value must be greater than or equal to minimum value for ratio memory allocation policy";
             goto loaderr;
         }
+        if (server.dynamic_threshold_max < server.initial_dynamic_threshold) {
+            err = "dynamic threshold: initial value must be less than or equal to maximum value for ratio memory allocation policy";
+            goto loaderr;
+        }
         if (server.dram_pmem_ratio.pmem_val == 0 && server.dram_pmem_ratio.dram_val == 0) {
             err = "dram-pmem-ratio must be defined for ratio memory allocation policy";
             goto loaderr;
@@ -2215,6 +2219,7 @@ standardConfig configs[] = {
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
     createUIntConfig("initial-dynamic-threshold", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.initial_dynamic_threshold, 64, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("dynamic-threshold-min", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.dynamic_threshold_min, 24, INTEGER_CONFIG, NULL, NULL),
+    createUIntConfig("dynamic-threshold-max", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.dynamic_threshold_max, 10000, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("static-threshold", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.static_threshold, 64, INTEGER_CONFIG, NULL, updateStaticthreshold),
 
     /* Unsigned Long configs */
