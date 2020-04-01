@@ -225,7 +225,7 @@ void zfree_no_tcache(void *ptr) {
 }
 #endif
 
-static void *zcalloc_dram(size_t size) {
+void *zcalloc_dram(size_t size) {
     void *ptr = calloc(1, size+PREFIX_SIZE);
 
     if (!ptr) zmalloc_oom_handler(size);
