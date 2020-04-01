@@ -193,7 +193,7 @@ endif
 
 ifeq ($(MALLOC),memkind)
 	FINAL_CFLAGS+= -DUSE_MEMKIND
-	FINAL_LIBS+= -lmemkind -ldaxctl
+	FINAL_LIBS+= -lmemkind -ldaxctl -lpmem
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
