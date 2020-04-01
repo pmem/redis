@@ -129,6 +129,14 @@ void *zmemcpy_pmem(void *dst, const void *src, size_t num) {
     zmalloc_pmem_not_available();
     return NULL;
 }
+
+void *zmemset_pmem(void *ptr, int value, size_t num) {
+    (void)(ptr);
+    (void)(value);
+    (void)(num);
+    zmalloc_pmem_not_available();
+    return NULL;
+}
 #endif
 
 #define update_zmalloc_stat_alloc(__n) do { \
@@ -272,6 +280,10 @@ static void *zrealloc_pmem(void *ptr, size_t size) {
 
 void *zmemcpy_pmem(void *dst, const void *src, size_t num) {
     return pmem_memcpy(dst, src, num, PMEM_F_MEM_NONTEMPORAL|PMEM_F_MEM_NODRAIN);
+}
+
+void *zmemset_pmem(void *ptr, int value, size_t num) {
+    return pmem_memset(ptr, value, num, PMEM_F_MEM_NONTEMPORAL|PMEM_F_MEM_NODRAIN);
 }
 #endif
 
