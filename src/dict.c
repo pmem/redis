@@ -160,7 +160,7 @@ int dictExpand(dict *d, unsigned long size)
     /* Allocate the new hash table and initialize all pointers to NULL */
     n.size = realsize;
     n.sizemask = realsize-1;
-    n.table = zcalloc(realsize*sizeof(dictEntry*));
+    n.table = zcalloc_dram(realsize*sizeof(dictEntry*));
     n.used = 0;
 
     /* Is this the first initialization? If so it's not really a rehashing
@@ -219,7 +219,7 @@ int dictRehash(dict *d, int n) {
 
     /* Check if we already rehashed the whole table... */
     if (d->ht[0].used == 0) {
-        zfree(d->ht[0].table);
+        zfree_dram(d->ht[0].table);
         d->ht[0] = d->ht[1];
         _dictReset(&d->ht[1]);
         d->rehashidx = -1;
