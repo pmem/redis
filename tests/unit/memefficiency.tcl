@@ -73,7 +73,12 @@ start_server {tags {"defrag"}} {
                 }
 
                 # Wait for the active defrag to stop working.
-                wait_for_condition 150 100 {
+                if {[string match {*memkind*} [s mem_allocator]]} {
+                    set defrag_stop_time 200
+                } else {
+                    set defrag_stop_time 150
+                }
+                wait_for_condition $defrag_stop_time 100 {
                     [s active_defrag_running] eq 0
                 } else {
                     after 120 ;# serverCron only updates the info once in 100ms
@@ -199,7 +204,12 @@ start_server {tags {"defrag"}} {
                 }
 
                 # wait for the active defrag to stop working
-                wait_for_condition 500 100 {
+                if {[string match {*memkind*} [s mem_allocator]]} {
+                    set defrag_stop_time 900
+                } else {
+                    set defrag_stop_time 500
+                }
+                wait_for_condition $defrag_stop_time 100 {
                     [s active_defrag_running] eq 0
                 } else {
                     after 120 ;# serverCron only updates the info once in 100ms
