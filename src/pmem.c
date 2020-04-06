@@ -33,8 +33,8 @@
 #include <stdio.h>
 
 #define THRESHOLD_STEP 0.05
-#define THRESHOLD_UP(val)  ((size_t)ceil((1+THRESHOLD_STEP)*val))
-#define THRESHOLD_DOWN(val) ((size_t)floor((1-THRESHOLD_STEP)*val))
+#define THRESHOLD_UP(val, step)  ((size_t)ceil((1+(step))*val))
+#define THRESHOLD_DOWN(val, step) ((size_t)floor((1-(step))*val))
 
 static inline size_t absDiff(size_t a, size_t b) {
     return a > b ? (a - b) : (b - a);
@@ -60,34 +60,39 @@ void pmemThresholdInit(void)
             serverAssert(NULL);
     }
 }
-//TODO: modify logic to check the trend of actual Ratio using pmem_checkpoint_value and dram_checkpoint_value
+
 void adjustPmemThresholdCycle(void) {
     if (server.memory_alloc_policy == MEM_POLICY_RATIO) {
         run_with_period(server.ratio_check_period) {
+            /* Difference between target ratio and current ratio in last checkpoint*/
+            static double ratio_diff_checkpoint;
+            /* PMEM and DRAM utilization in last checkpoint*/
+            static size_t total_memory_checkpoint;
             size_t pmem_memory = zmalloc_used_pmem_memory();
             size_t dram_memory = zmalloc_used_memory();
-            size_t total_memory = pmem_memory + dram_memory;
-            size_t total_memory_checkpoint = server.pmem_checkpoint_value + server.dram_checkpoint_value;
+            size_t total_memory_current = pmem_memory + dram_memory;
             // do not modify threshold when change in memory usage is too small
-            if (absDiff(total_memory_checkpoint, total_memory) > 100) {
-                //revert logic to avoid division by zero
-                double setting_state = (double)server.dram_pmem_ratio.pmem_val/server.dram_pmem_ratio.dram_val;
-                double current_state = (double)pmem_memory/dram_memory;
-                size_t threshold = zmalloc_get_threshold();
-                if (fabs(setting_state-current_state) > 0.1) {
-                    if (setting_state < current_state) {
-                        size_t higher_threshold = THRESHOLD_UP(threshold);
-                        if (higher_threshold > server.dynamic_threshold_max) return;
-                        zmalloc_set_threshold(higher_threshold);
+            if (absDiff(total_memory_checkpoint, total_memory_current) > 100) {
+                double current_ratio = (double)pmem_memory/dram_memory;
+                double current_ratio_diff = fabs(current_ratio - server.target_pmem_dram_ratio);
+                if (fabs(server.target_pmem_dram_ratio-current_ratio) > 0.02) {
+                    //current ratio is worse than moment before
+                    double step = (current_ratio_diff < ratio_diff_checkpoint) ?
+                                  THRESHOLD_STEP : 5*THRESHOLD_STEP;
+                    size_t threshold = zmalloc_get_threshold();
+                    if (server.target_pmem_dram_ratio < current_ratio) {
+                        size_t higher_threshold = THRESHOLD_UP(threshold,step);
+                        if (higher_threshold <= server.dynamic_threshold_max)
+                            zmalloc_set_threshold(higher_threshold);
                     } else {
-                        size_t lower_threshold = THRESHOLD_DOWN(threshold);
-                        if (lower_threshold < server.dynamic_threshold_min) return;
-                        zmalloc_set_threshold(lower_threshold);
+                        size_t lower_threshold = THRESHOLD_DOWN(threshold,step);
+                        if (lower_threshold >= server.dynamic_threshold_min)
+                            zmalloc_set_threshold(lower_threshold);
                     }
                 }
+                ratio_diff_checkpoint = current_ratio_diff;
             }
-            server.pmem_checkpoint_value = pmem_memory;
-            server.dram_checkpoint_value = dram_memory;
+            total_memory_checkpoint = total_memory_current;
         }
     }
 }
