@@ -389,6 +389,7 @@ void loadServerConfigFromString(char *config) {
                 }
                 server.dram_pmem_ratio.dram_val = dram;
                 server.dram_pmem_ratio.pmem_val = pmem;
+                server.target_pmem_dram_ratio = (double)pmem/dram;
         } else if (!strcasecmp(argv[0],"dir") && argc == 2) {
             if (chdir(argv[1]) == -1) {
                 serverLog(LL_WARNING,"Can't chdir to '%s': %s",
