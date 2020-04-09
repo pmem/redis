@@ -77,8 +77,9 @@ void adjustPmemThresholdCycle(void) {
                 double current_ratio_diff = fabs(current_ratio - server.target_pmem_dram_ratio);
                 if (fabs(server.target_pmem_dram_ratio-current_ratio) > 0.02) {
                     //current ratio is worse than moment before
+                    double variableMultipler = current_ratio/server.target_pmem_dram_ratio;
                     double step = (current_ratio_diff < ratio_diff_checkpoint) ?
-                                  THRESHOLD_STEP : 5*THRESHOLD_STEP;
+                                  variableMultipler*THRESHOLD_STEP : 5*variableMultipler*THRESHOLD_STEP;
                     size_t threshold = zmalloc_get_threshold();
                     if (server.target_pmem_dram_ratio < current_ratio) {
                         size_t higher_threshold = THRESHOLD_UP(threshold,step);
