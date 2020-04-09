@@ -77,10 +77,8 @@ void zlibc_free(void *ptr) {
 #include <errno.h>
 #define malloc(size) memkind_malloc(MEMKIND_DEFAULT,size)
 #define calloc(count,size) memkind_calloc(MEMKIND_DEFAULT,count,size)
-#define realloc(ptr,size) memkind_realloc(NULL,ptr,size)
 #define realloc_dram(ptr,size) memkind_realloc(MEMKIND_DEFAULT,ptr,size)
 #define realloc_pmem(ptr,size) memkind_realloc(MEMKIND_DAX_KMEM,ptr,size)
-#define free(ptr) memkind_free(NULL,ptr)
 #define free_dram(ptr) memkind_free(MEMKIND_DEFAULT,ptr)
 #define free_pmem(ptr) memkind_free(MEMKIND_DAX_KMEM,ptr)
 #endif
