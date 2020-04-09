@@ -32,7 +32,8 @@
 #include <math.h>
 #include <stdio.h>
 
-#define THRESHOLD_STEP 0.05
+#define THRESHOLD_STEP_NORMAL 0.05
+#define THRESHOLD_STEP_AGGRESIVE (THRESHOLD_STEP_NORMAL*5)
 #define THRESHOLD_UP(val, step)  ((size_t)ceil((1+(step))*val))
 #define THRESHOLD_DOWN(val, step) ((size_t)floor((1-(step))*val))
 
@@ -77,8 +78,9 @@ void adjustPmemThresholdCycle(void) {
                 double current_ratio_diff = fabs(current_ratio - server.target_pmem_dram_ratio);
                 if (fabs(server.target_pmem_dram_ratio-current_ratio) > 0.02) {
                     //current ratio is worse than moment before
+                    double variableMultipler = current_ratio/server.target_pmem_dram_ratio;
                     double step = (current_ratio_diff < ratio_diff_checkpoint) ?
-                                  THRESHOLD_STEP : 5*THRESHOLD_STEP;
+                                  variableMultipler*THRESHOLD_STEP_NORMAL : variableMultipler*THRESHOLD_STEP_AGGRESIVE;
                     size_t threshold = zmalloc_get_threshold();
                     if (server.target_pmem_dram_ratio < current_ratio) {
                         size_t higher_threshold = THRESHOLD_UP(threshold,step);
