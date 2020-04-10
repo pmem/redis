@@ -41,6 +41,9 @@
 
 const char *SDS_NOINIT = "SDS_NOINIT";
 
+#define SDS_GENERAL_VARIANT  0
+#define SDS_DRAM_VARIANT     1
+
 static inline int sdsHdrSize(char type) {
     switch(type&SDS_TYPE_MASK) {
         case SDS_TYPE_5:
@@ -86,7 +89,7 @@ static inline char sdsReqType(size_t string_size) {
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
  * \0 characters in the middle, as the length is stored in the sds header. */
-sds sdsnewlen(const void *init, size_t initlen) {
+static sds _sdsnewlen(const void *init, size_t initlen, int on_dram) {
     void *sh;
     sds s;
     char type = sdsReqType(initlen);
@@ -96,7 +99,8 @@ sds sdsnewlen(const void *init, size_t initlen) {
     int hdrlen = sdsHdrSize(type);
     unsigned char *fp; /* flags pointer. */
 
-    sh = s_malloc(hdrlen+initlen+1);
+    sh = (on_dram == SDS_DRAM_VARIANT) ? s_dram_malloc(hdrlen+initlen+1)
+                                       : s_malloc(hdrlen+initlen+1);
     if (sh == NULL) return NULL;
     if (init==SDS_NOINIT)
         init = NULL;
@@ -144,10 +148,24 @@ sds sdsnewlen(const void *init, size_t initlen) {
     return s;
 }
 
+sds sdsnewlen(const void *init, size_t initlen) {
+    return _sdsnewlen(init, initlen, SDS_GENERAL_VARIANT);
+}
+
+static sds sdsdramnewlen(const void *init, size_t initlen) {
+    return _sdsnewlen(init, initlen, SDS_DRAM_VARIANT);
+}
+
 /* Create an empty (zero length) sds string. Even in this case the string
  * always has an implicit null term. */
 sds sdsempty(void) {
     return sdsnewlen("",0);
+}
+
+/* Create an empty (zero length) sds string on DRAM. Even in this case the string
+ * always has an implicit null term. */
+sds sdsdramempty(void) {
+    return sdsdramnewlen("",0);
 }
 
 /* Create a new sds string starting from a null terminated C string. */
