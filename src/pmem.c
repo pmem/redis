@@ -75,7 +75,7 @@ void adjustPmemThresholdCycle(void) {
             if (absDiff(total_memory_checkpoint, total_memory_current) > 100) {
                 double current_ratio = (double)pmem_memory/dram_memory;
                 double current_ratio_diff = fabs(current_ratio - server.target_pmem_dram_ratio);
-                if (fabs(server.target_pmem_dram_ratio-current_ratio) > 0.02) {
+                if (current_ratio_diff > 0.02) {
                     //current ratio is worse than moment before
                     double step = (current_ratio_diff < ratio_diff_checkpoint) ?
                                   THRESHOLD_STEP : 5*THRESHOLD_STEP;
