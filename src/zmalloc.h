@@ -107,6 +107,7 @@ void zmalloc_set_threshold(size_t threshold);
 size_t zmalloc_get_threshold(void);
 void *zmalloc_dram(size_t size);
 void *zcalloc_dram(size_t size);
+void *zrealloc_dram(void *ptr, size_t size);
 
 #ifdef HAVE_DEFRAG
 void zfree_no_tcache(void *ptr);
