@@ -191,7 +191,7 @@ void clientInstallWriteHandler(client *c) {
          * a system call. We'll only really install the write handler if
          * we'll not be able to write the whole reply at once. */
         c->flags |= CLIENT_PENDING_WRITE;
-        listAddNodeHead(server.clients_pending_write,c);
+        listAddNodeHeadDRAM(server.clients_pending_write,c);
     }
 }
 
@@ -1067,7 +1067,7 @@ void unlinkClient(client *c) {
     if (c->flags & CLIENT_PENDING_WRITE) {
         ln = listSearchKey(server.clients_pending_write,c);
         serverAssert(ln != NULL);
-        listDelNode(server.clients_pending_write,ln);
+        listDelNodeDRAM(server.clients_pending_write,ln);
         c->flags &= ~CLIENT_PENDING_WRITE;
     }
 
@@ -1388,7 +1388,7 @@ int handleClientsWithPendingWrites(void) {
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
         c->flags &= ~CLIENT_PENDING_WRITE;
-        listDelNode(server.clients_pending_write,ln);
+        listDelNodeDRAM(server.clients_pending_write,ln);
 
         /* If a client is protected, don't do anything,
          * that may trigger write error or recreate handler. */
@@ -3088,7 +3088,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
             freeClientAsync(c);
         }
     }
-    listEmpty(server.clients_pending_write);
+    listEmptyDRAM(server.clients_pending_write);
     return processed;
 }
 
