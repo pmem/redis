@@ -193,11 +193,7 @@ list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
     return list;
 }
 
-/* Remove the specified node from the specified list.
- * It's up to the caller to free the private value of the node.
- *
- * This function can't fail. */
-void listDelNode(list *list, listNode *node)
+static void _listDelNode(list *list, listNode *node, int on_dram)
 {
     if (node->prev)
         node->prev->next = node->next;
@@ -208,8 +204,26 @@ void listDelNode(list *list, listNode *node)
     else
         list->tail = node->prev;
     if (list->free) list->free(node->value);
-    zfree(node);
+    if (on_dram == LIST_DRAM_VARIANT) zfree_dram(node); else zfree(node);
     list->len--;
+}
+
+/* Remove the specified node from the specified list.
+ * It's up to the caller to free the private value of the node.
+ *
+ * This function can't fail. */
+void listDelNode(list *list, listNode *node)
+{
+    _listDelNode(list, node, LIST_GENERAL_VARIANT);
+}
+
+/* Remove the specified node from DRAM the specified list.
+ * It's up to the caller to free the private value of the node.
+ *
+ * This function can't fail. */
+void listDelNodeDRAM(list *list, listNode *node)
+{
+    _listDelNode(list, node, LIST_DRAM_VARIANT);
 }
 
 /* Returns a list iterator 'iter'. After the initialization every
