@@ -96,17 +96,11 @@ void listRelease(list *list)
     zfree(list);
 }
 
-/* Add a new node to the list, to head, containing the specified 'value'
- * pointer as value.
- *
- * On error, NULL is returned and no operation is performed (i.e. the
- * list remains unaltered).
- * On success the 'list' pointer you pass to the function is returned. */
-list *listAddNodeHead(list *list, void *value)
+static list *_listAddNodeHead(list *list, void *value, int on_dram)
 {
     listNode *node;
-
-    if ((node = zmalloc(sizeof(*node))) == NULL)
+    node = (on_dram == LIST_DRAM_VARIANT) ? zmalloc_dram(sizeof(*node)) : zmalloc(sizeof(*node));
+    if (node == NULL)
         return NULL;
     node->value = value;
     if (list->len == 0) {
@@ -120,6 +114,28 @@ list *listAddNodeHead(list *list, void *value)
     }
     list->len++;
     return list;
+}
+
+/* Add a new node to the list, to head, containing the specified 'value'
+ * pointer as value.
+ *
+ * On error, NULL is returned and no operation is performed (i.e. the
+ * list remains unaltered).
+ * On success the 'list' pointer you pass to the function is returned. */
+list *listAddNodeHead(list *list, void *value)
+{
+    return _listAddNodeHead(list, value, LIST_GENERAL_VARIANT);
+}
+
+/* Add a new node to the list on DRAM, to head, containing the specified 'value'
+ * pointer as value.
+ *
+ * On error, NULL is returned and no operation is performed (i.e. the
+ * list remains unaltered).
+ * On success the 'list' pointer you pass to the function is returned. */
+list *listAddNodeHeadDRAM(list *list, void *value)
+{
+    return _listAddNodeHead(list, value, LIST_DRAM_VARIANT);
 }
 
 /* Add a new node to the list, to tail, containing the specified 'value'
