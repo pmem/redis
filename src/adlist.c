@@ -70,7 +70,7 @@ list *listCreateDRAM(void) {
 }
 
 /* Remove all the elements from the list without destroying the list itself. */
-void listEmpty(list *list)
+static void _listEmpty(list *list, int on_dram)
 {
     unsigned long len;
     listNode *current, *next;
@@ -80,11 +80,21 @@ void listEmpty(list *list)
     while(len--) {
         next = current->next;
         if (list->free) list->free(current->value);
-        zfree(current);
+        if (on_dram == LIST_DRAM_VARIANT) zfree_dram(current); else zfree(current);
         current = next;
     }
     list->head = list->tail = NULL;
     list->len = 0;
+}
+
+/* Remove all the elements from the list without destroying the list itself. */
+void listEmpty(list *list) {
+    _listEmpty(list, LIST_GENERAL_VARIANT);
+}
+
+/* Remove all the elements from the list on DRAM without destroying the list itself. */
+void listEmptyDRAM(list *list) {
+    _listEmpty(list, LIST_DRAM_VARIANT);
 }
 
 /* Free the whole list.
