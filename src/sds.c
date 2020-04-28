@@ -151,9 +151,10 @@ static sds _sdsnewlen(const void *init, size_t initlen, int on_dram) {
             break;
         }
     }
+    s[initlen] = '\0';
     if (initlen && init)
         (sds_place == SDS_ON_DRAM) ? memcpy(s, init, initlen) : zmemcpy_pmem(s, init, initlen);
-    s[initlen] = '\0';
+
     return s;
 }
 
