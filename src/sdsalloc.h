@@ -41,6 +41,8 @@
 
 #include "zmalloc.h"
 #define s_malloc zmalloc
+#define s_dram_malloc zmalloc_dram
+#define s_pmem_malloc zmalloc_pmem
 #define s_realloc zrealloc
 #define s_free zfree
 #define s_dram_malloc zmalloc_dram
