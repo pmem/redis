@@ -103,7 +103,7 @@ static void zfree_pmem(void *ptr) {
     zmalloc_pmem_not_available();
 }
 
-static void *zmalloc_pmem(size_t size) {
+void *zmalloc_pmem(size_t size) {
     (void)(size);
     zmalloc_pmem_not_available();
     return NULL;
@@ -218,7 +218,7 @@ static void zfree_pmem(void *ptr) {
 #endif
 }
 
-static void *zmalloc_pmem(size_t size) {
+void *zmalloc_pmem(size_t size) {
     void *ptr = memkind_malloc(MEMKIND_DAX_KMEM, size+PREFIX_SIZE);
     if (!ptr && errno==ENOMEM) zmalloc_oom_handler(size);
 #ifdef HAVE_MALLOC_SIZE
