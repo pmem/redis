@@ -1749,6 +1749,7 @@ void execCommandPropagateExec(client *c);
 
 /* Redis object implementation */
 void decrRefCount(robj *o);
+void decrRefCountDRAM(robj *o);
 void decrRefCountVoid(void *o);
 void incrRefCount(robj *o);
 robj *makeObjectShared(robj *o);
