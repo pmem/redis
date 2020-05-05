@@ -39,7 +39,7 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 robj *createObject(int type, void *ptr) {
-    robj *o = zmalloc(sizeof(*o));
+    robj *o = zmalloc_dram(sizeof(*o));
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
     o->ptr = ptr;
