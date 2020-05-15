@@ -1,4 +1,6 @@
-This README is just a fast *quick start* document. You can find more detailed documentation at [redis.io](https://redis.io).
+This README is for Redis adjusted to store objects on both DRAM and Intel Optane Persistent Memory(PMEM).
+
+Redis with Persistent Memory is a database that fully uses the advantages of DRAM and PMEM. The main concept is to store the bigger size values on the PMEM, configured as system-ram ([KMEM DAX](https://pmem.io/2020/01/20/memkind-dax-kmem.html)), while the smaller allocations are preffered to be kept on DRAM. The ratio of data stored on PMEM and DRAM is selected in regard to obtaining the best performance. The data stored on the medium is volatile and the persistency is preserved with RDB/AOF mechanism.
 
 What is Redis?
 --------------
@@ -22,6 +24,9 @@ If you want to know more, this is a list of selected starting points:
 
 Building Redis
 --------------
+You will need to install the following required packages on the build system:
+* memkind
+* libdaxctl-devel (v66 or later) -- required by libmemkind
 
 Redis can be compiled and used on Linux, OSX, OpenBSD, NetBSD, FreeBSD.
 We support big endian and little endian architectures, and both 32 bit
