@@ -25,8 +25,18 @@ If you want to know more, this is a list of selected starting points:
 Building Redis
 --------------
 You will need to install the following required packages on the build system:
-* memkind
 * libdaxctl-devel (v66 or later) -- required by libmemkind
+
+* libmemkind (commit:
+ master: Merge pull request #355 from michalbiesek/configure-heap-manager-disable
+https://github.com/memkind/memkind/commit/f370a8828935fb31a9f0c0bf36f7e339eb3a8c13)
+
+With custom build options, to install libmemkind please call:
+
+    % ./autogen.sh
+    % ARENA_LIMIT=1 MIN_LG_ALIGN=3 ./configure --disable-heap-manager
+    % make
+    % make install
 
 Redis can be compiled and used on Linux, OSX, OpenBSD, NetBSD, FreeBSD.
 We support big endian and little endian architectures, and both 32 bit
