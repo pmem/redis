@@ -104,6 +104,7 @@ start_server {tags {"introspection"}} {
             dynamic-threshold-min
             dynamic-threshold-max
             memory-ratio-check-period
+            hashtable-on-dram
         }
 
         set configs {}

@@ -2945,6 +2945,7 @@ void initServer(void) {
     slowlogInit();
     latencyMonitorInit();
     pmemThresholdInit();
+    dictSetAllocPolicy(server.hashtable_on_dram);
 }
 
 /* Some steps in server initialization need to be done last (after modules

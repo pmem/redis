@@ -1348,6 +1348,7 @@ struct redisServer {
     ratioDramPmemConfig dram_pmem_ratio;      /* DRAM/Persistent Memory ratio */
     double target_pmem_dram_ratio;            /* Target PMEM/DRAM ratio */
     int ratio_check_period;                   /* Period of checking ratio in Cron*/
+    int hashtable_on_dram;                    /* Keep hashtable always on DRAM */
     /* Blocked clients */
     unsigned int blocked_clients;   /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
