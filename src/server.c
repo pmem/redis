@@ -1520,6 +1520,12 @@ void initServerConfig(void) {
     server.activerehashing = CONFIG_DEFAULT_ACTIVE_REHASHING;
     server.notify_keyspace_events = 0;
     server.maxclients = CONFIG_DEFAULT_MAX_CLIENTS;
+    server.memory_alloc_policy = MEM_POLICY_ONLY_DRAM;
+    server.ratio_check_period = 100;
+    server.initial_dynamic_threshold = 64;
+    server.dynamic_threshold_min = 24;
+    server.dynamic_threshold_max = 10000;
+    server.static_threshold = 64;
     server.bpop_blocked_clients = 0;
     server.maxmemory = CONFIG_DEFAULT_MAXMEMORY;
     server.maxmemory_policy = CONFIG_DEFAULT_MAXMEMORY_POLICY;
