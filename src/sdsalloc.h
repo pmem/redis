@@ -43,6 +43,7 @@
 #define s_malloc zmalloc
 #define s_realloc zrealloc
 #define s_free zfree
+#define s_freeDram zfree_dram
 #define s_dram_malloc zmalloc_dram
 
 #endif

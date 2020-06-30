@@ -286,6 +286,11 @@ void freeStringObject(robj *o) {
         sdsfree(o->ptr);
     }
 }
+void freeStringObjectDram(robj *o) {
+    if (o->encoding == OBJ_ENCODING_RAW) {
+        sdsfreeDram(o->ptr);
+    }
+}
 
 void freeListObject(robj *o) {
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
@@ -356,7 +361,15 @@ void incrRefCount(robj *o) {
 static void _decrRefCount(robj *o, int on_dram) {
     if (o->refcount == 1) {
         switch(o->type) {
-        case OBJ_STRING: freeStringObject(o); break;
+        case OBJ_STRING: 
+		if (on_dram == OBJ_MEMORY_GENERAL) {
+			freeStringObject(o);
+		}
+		else {
+			freeStringObjectDram(o);
+		}
+		break;
+
         case OBJ_LIST: freeListObject(o); break;
         case OBJ_SET: freeSetObject(o); break;
         case OBJ_ZSET: freeZsetObject(o); break;
