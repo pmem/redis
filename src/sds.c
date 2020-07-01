@@ -60,6 +60,24 @@ static inline int sdsHdrSize(char type) {
     return 0;
 }
 
+/* Returns size of sdsHdr by checking pointer alignment (expects 8 byte
+ * alignment). Optimizes retriving sdsHdr size by not refering to sds data */
+static inline int sdsHdrSizeOptim(char* s) {
+    switch((uintptr_t)s%8) {
+        case sizeof(struct sdshdr5)%8:
+            return sizeof(struct sdshdr5);
+        case sizeof(struct sdshdr8)%8:
+            return sizeof(struct sdshdr8);
+        case sizeof(struct sdshdr16)%8:
+            return sizeof(struct sdshdr16);
+        case sizeof(struct sdshdr32)%8:
+            return sizeof(struct sdshdr32);
+        case sizeof(struct sdshdr64)%8:
+            return sizeof(struct sdshdr64);
+    }
+    return 0;
+}
+
 static inline char sdsReqType(size_t string_size) {
     if (string_size < 1<<5)
         return SDS_TYPE_5;
@@ -183,6 +201,11 @@ sds sdsdup(const sds s) {
 void sdsfree(sds s) {
     if (s == NULL) return;
     s_free((char*)s-sdsHdrSize(s[-1]));
+}
+
+void sdsfreeOptim(sds s) {
+    if (s == NULL) return;
+    s_free((char*)s-sdsHdrSizeOptim(s));
 }
 
 /* Set the sds string length to the length as obtained with strlen(), so
