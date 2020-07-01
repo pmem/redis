@@ -185,6 +185,29 @@ void sdsfree(sds s) {
     s_free((char*)s-sdsHdrSize(s[-1]));
 }
 
+/* Returns size of sdsHdr by checking pointer alignment (expects 8 byte
+ * alignment). Optimizes retriving sdsHdr size by not refering to sds data */
+static inline int sdsHdrSizeOptim(char* s) {
+    switch((uintptr_t)s%8) {
+	case 1:
+	    return sizeof(struct sdshdr5);
+	case 2:
+	    return sizeof(struct sdshdr32);
+	case 3:
+	    return sizeof(struct sdshdr8);
+	case 4:
+	    return sizeof(struct sdshdr64);
+	case 5:
+	    return sizeof(struct sdshdr16);
+    }
+    return 0;
+}
+
+void sdsfreeOptim(sds s) {
+    if (s == NULL) return;
+    s_free((char*)s-sdsHdrSizeOptim(s));
+}
+
 /* Set the sds string length to the length as obtained with strlen(), so
  * considering as content only up to the first null term character.
  *
