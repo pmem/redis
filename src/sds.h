@@ -64,12 +64,14 @@ struct __attribute__ ((__packed__)) sdshdr32 {
     uint32_t len; /* used */
     uint32_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
+    char padding; /* Added to have unique value for %8 operation*/
     char buf[];
 };
 struct __attribute__ ((__packed__)) sdshdr64 {
     uint64_t len; /* used */
     uint64_t alloc; /* excluding the header and null terminator */
     unsigned char flags; /* 3 lsb of type, 5 unused bits */
+    char padding[3]; /* Added to have unique value for %8 operation */
     char buf[];
 };
 
@@ -221,6 +223,7 @@ sds sdsempty(void);
 sds sdsdramempty(void);
 sds sdsdup(const sds s);
 void sdsfree(sds s);
+void sdsfreeOptim(sds s);
 sds sdsgrowzero(sds s, size_t len);
 sds sdscatlen(sds s, const void *t, size_t len);
 sds sdscat(sds s, const char *t);
