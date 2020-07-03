@@ -116,7 +116,7 @@ static void _dictReset(dictht *ht)
 dict *dictCreate(dictType *type,
         void *privDataPtr)
 {
-    dict *d = zmalloc(sizeof(*d));
+    dict *d = zmalloc_dram(sizeof(*d));
 
     _dictInit(d,type,privDataPtr);
     return d;
@@ -475,7 +475,7 @@ void dictRelease(dict *d)
 {
     _dictClear(d,&d->ht[0],NULL);
     _dictClear(d,&d->ht[1],NULL);
-    zfree(d);
+    zfree_dram(d);
 }
 
 dictEntry *dictFind(dict *d, const void *key)
