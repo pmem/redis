@@ -169,7 +169,7 @@ list *listAddNodeHeadDRAM(list *list, void *value)
  * On error, NULL is returned and no operation is performed (i.e. the
  * list remains unaltered).
  * On success the 'list' pointer you pass to the function is returned. */
-list *listAddNodeTail(list *list, void *value)
+list *_listAddNodeTail(list *list, void *value, int on_dram)
 {
     listNode *node;
 
@@ -187,6 +187,14 @@ list *listAddNodeTail(list *list, void *value)
     }
     list->len++;
     return list;
+}
+
+list *listAddNodeTail(list *list, void *value) {
+    return _listAddNodeTail(list, value, LIST_GENERAL_VARIANT);
+}
+
+list *listAddNodeTailDRAM(list *list, void *value) {
+    return _listAddNodeTail(list, value, LIST_DRAM_VARIANT);
 }
 
 list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
