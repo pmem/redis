@@ -219,7 +219,7 @@ void sdsclear(sds s) {
  *
  * Note: this does not change the *length* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
-sds sdsMakeRoomFor(sds s, size_t addlen) {
+static sds _sdsMakeRoomFor(sds s, size_t addlen, int on_dram) {
     void *sh, *newsh;
     size_t avail = sdsavail(s);
     size_t len, newlen;
@@ -252,7 +252,8 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     } else {
         /* Since the header size changes, need to move the string forward,
          * and can't use realloc */
-        newsh = s_malloc(hdrlen+newlen+1);
+        newsh = (on_dram == SDS_DRAM_VARIANT) ? s_dram_malloc(hdrlen+newlen+1)
+                                               : s_malloc(hdrlen+newlen+1);
         if (newsh == NULL) return NULL;
         memcpy((char*)newsh+hdrlen, s, len+1);
         s_free(sh);
@@ -263,6 +264,15 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     sdssetalloc(s, newlen);
     return s;
 }
+
+sds sdsMakeRoomFor(sds s, size_t addlen) {
+    return _sdsMakeRoomFor(s, addlen, SDS_GENERAL_VARIANT);
+}
+
+sds sdsDramMakeRoomFor(sds s, size_t addlen) {
+    return _sdsMakeRoomFor(s, addlen, SDS_DRAM_VARIANT);
+}
+
 
 /* Reallocate the sds string so that it has no free space at the end. The
  * contained string remains not altered, but next concatenation operations
