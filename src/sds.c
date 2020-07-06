@@ -44,6 +44,9 @@ const char *SDS_NOINIT = "SDS_NOINIT";
 #define SDS_GENERAL_VARIANT  0
 #define SDS_DRAM_VARIANT     1
 
+#define SDS_ON_PMEM          0
+#define SDS_ON_DRAM          1
+
 static inline int sdsHdrSize(char type) {
     switch(type&SDS_TYPE_MASK) {
         case SDS_TYPE_5:
@@ -93,18 +96,24 @@ static sds _sdsnewlen(const void *init, size_t initlen, int on_dram) {
     void *sh;
     sds s;
     char type = sdsReqType(initlen);
+    int sds_place;
+
     /* Empty strings are usually created in order to append. Use type 8
      * since type 5 is not good at this. */
     if (type == SDS_TYPE_5 && initlen == 0) type = SDS_TYPE_8;
     int hdrlen = sdsHdrSize(type);
     unsigned char *fp; /* flags pointer. */
+    if ((on_dram == SDS_GENERAL_VARIANT) && (hdrlen+initlen+1) >= zmalloc_get_threshold()) {
+        sds_place = SDS_ON_PMEM;
+    } else {
+        sds_place = SDS_ON_DRAM;
+    }
 
-    sh = (on_dram == SDS_DRAM_VARIANT) ? s_dram_malloc(hdrlen+initlen+1)
-                                       : s_malloc(hdrlen+initlen+1);
+    sh = (sds_place == SDS_ON_DRAM) ? s_dram_malloc(hdrlen+initlen+1) : s_pmem_malloc(hdrlen+initlen+1);
     if (init==SDS_NOINIT)
         init = NULL;
     else if (!init)
-        memset(sh, 0, hdrlen+initlen+1);
+        (sds_place == SDS_ON_DRAM) ? memset(sh, 0, hdrlen+initlen+1) : zmemset_pmem(sh, 0, hdrlen+initlen+1);
     if (sh == NULL) return NULL;
     s = (char*)sh+hdrlen;
     fp = ((unsigned char*)s)-1;
@@ -142,9 +151,10 @@ static sds _sdsnewlen(const void *init, size_t initlen, int on_dram) {
             break;
         }
     }
-    if (initlen && init)
-        memcpy(s, init, initlen);
     s[initlen] = '\0';
+    if (initlen && init)
+        (sds_place == SDS_ON_DRAM) ? memcpy(s, init, initlen) : zmemcpy_pmem(s, init, initlen);
+
     return s;
 }
 

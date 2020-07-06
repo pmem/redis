@@ -75,6 +75,7 @@ void zlibc_free(void *ptr) {
 #define dallocx(ptr,flags) je_dallocx(ptr,flags)
 #elif defined(USE_MEMKIND)
 #include <errno.h>
+#include <libpmem.h>
 #define malloc(size) memkind_malloc(MEMKIND_DEFAULT,size)
 #define calloc(count,size) memkind_calloc(MEMKIND_DEFAULT,count,size)
 #define realloc_dram(ptr,size) memkind_realloc(MEMKIND_DEFAULT,ptr,size)
@@ -102,7 +103,7 @@ static void zfree_pmem(void *ptr) {
     zmalloc_pmem_not_available();
 }
 
-static void *zmalloc_pmem(size_t size) {
+void *zmalloc_pmem(size_t size) {
     (void)(size);
     zmalloc_pmem_not_available();
     return NULL;
@@ -117,6 +118,22 @@ static void *zcalloc_pmem(size_t size) {
 static void *zrealloc_pmem(void *ptr, size_t size) {
     (void)(ptr);
     (void)(size);
+    zmalloc_pmem_not_available();
+    return NULL;
+}
+
+void *zmemcpy_pmem(void *dst, const void *src, size_t num) {
+    (void)(dst);
+    (void)(src);
+    (void)(num);
+    zmalloc_pmem_not_available();
+    return NULL;
+}
+
+void *zmemset_pmem(void *ptr, int value, size_t num) {
+    (void)(ptr);
+    (void)(value);
+    (void)(num);
     zmalloc_pmem_not_available();
     return NULL;
 }
@@ -201,7 +218,7 @@ static void zfree_pmem(void *ptr) {
 #endif
 }
 
-static void *zmalloc_pmem(size_t size) {
+void *zmalloc_pmem(size_t size) {
     void *ptr = memkind_malloc(MEMKIND_DAX_KMEM, size+PREFIX_SIZE);
     if (!ptr && errno==ENOMEM) zmalloc_oom_handler(size);
 #ifdef HAVE_MALLOC_SIZE
@@ -259,6 +276,14 @@ static void *zrealloc_pmem(void *ptr, size_t size) {
     update_zmalloc_pmem_stat_alloc(size+PREFIX_SIZE);
     return (char*)newptr+PREFIX_SIZE;
 #endif
+}
+
+void *zmemcpy_pmem(void *dst, const void *src, size_t num) {
+    return pmem_memcpy(dst, src, num, PMEM_F_MEM_NONTEMPORAL|PMEM_F_MEM_NODRAIN);
+}
+
+void *zmemset_pmem(void *ptr, int value, size_t num) {
+    return pmem_memset(ptr, value, num, PMEM_F_MEM_NONTEMPORAL|PMEM_F_MEM_NODRAIN);
 }
 #endif
 
