@@ -230,6 +230,12 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictFreeVal(db->dict, &auxentry);
 }
 
+static int removeExpireOptim(redisDb *db, robj *key) {
+    /* An expire may only be removed if there is a corresponding entry in the
+     * main dict. Otherwise, the key will never be freed. */
+    return dictDelete(db->expires,key->ptr) == DICT_OK;
+}
+
 /* High level Set operation. This function can be used in order to set
  * a key, whatever it was existing or not, to a new object.
  *
@@ -242,13 +248,41 @@ void dbOverwrite(redisDb *db, robj *key, robj *val) {
  * The client 'c' argument may be set to NULL if the operation is performed
  * in a context where there is no clear client performing the operation. */
 void genericSetKey(client *c, redisDb *db, robj *key, robj *val, int keepttl, int signal) {
-    if (lookupKeyWrite(db,key) == NULL) {
+    expireIfNeeded(db,key);
+    robj *old = NULL;
+    dictEntry *de = dictFind(db->dict, key->ptr);
+    if (de) {
+        old= dictGetVal(de);
+
+        /* Update the access time for the ageing algorithm.
+         * Don't do it if we have a saving child, as this will trigger
+         * a copy on write madness. */
+        if (!hasActiveChildProcess()) {
+            if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+                updateLFU(val);
+            } else {
+                val->lru = LRU_CLOCK();
+            }
+        }
+    }
+    if (old == NULL) {
         dbAdd(db,key,val);
     } else {
-        dbOverwrite(db,key,val);
+        dictEntry auxentry = *de;
+        if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+            val->lru = old->lru;
+        }
+        dictSetVal(db->dict, de, val);
+        
+        if (server.lazyfree_lazy_server_del) {
+            freeObjAsync(old);
+            dictSetVal(db->dict, &auxentry, NULL);
+        }
+        
+        dictFreeVal(db->dict, &auxentry);
     }
     incrRefCount(val);
-    if (!keepttl) removeExpire(db,key);
+    if (!keepttl) removeExpireOptim(db,key);
     if (signal) signalModifiedKey(c,db,key);
 }
 
