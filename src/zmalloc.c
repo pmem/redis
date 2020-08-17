@@ -75,11 +75,11 @@ void zlibc_free(void *ptr) {
 #define dallocx(ptr,flags) je_dallocx(ptr,flags)
 #elif defined(USE_MEMKIND)
 #include <errno.h>
-#define malloc(size) memkind_malloc(MEMKIND_DEFAULT,size)
-#define calloc(count,size) memkind_calloc(MEMKIND_DEFAULT,count,size)
-#define realloc_dram(ptr,size) memkind_realloc(MEMKIND_DEFAULT,ptr,size)
+#define malloc(size) memkind_malloc(MEMKIND_REGULAR,size)
+#define calloc(count,size) memkind_calloc(MEMKIND_REGULAR,count,size)
+#define realloc_dram(ptr,size) memkind_realloc(MEMKIND_REGULAR,ptr,size)
 #define realloc_pmem(ptr,size) memkind_realloc(MEMKIND_DAX_KMEM,ptr,size)
-#define free_dram(ptr) memkind_free(MEMKIND_DEFAULT,ptr)
+#define free_dram(ptr) memkind_free(MEMKIND_REGULAR,ptr)
 #define free_pmem(ptr) memkind_free(MEMKIND_DAX_KMEM,ptr)
 #endif
 
@@ -180,7 +180,7 @@ void *zmalloc_dram(size_t size) {
 #ifdef USE_MEMKIND
 static int zmalloc_is_pmem(void * ptr) {
     struct memkind *temp_kind = memkind_detect_kind(ptr);
-    return (temp_kind == MEMKIND_DEFAULT) ? DRAM_LOCATION : PMEM_LOCATION;
+    return (temp_kind == MEMKIND_REGULAR) ? DRAM_LOCATION : PMEM_LOCATION;
 }
 
 static void zfree_pmem(void *ptr) {
