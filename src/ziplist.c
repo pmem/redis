@@ -587,7 +587,11 @@ unsigned char *ziplistNew(void) {
 
 /* Resize the ziplist. */
 unsigned char *ziplistResize(unsigned char *zl, unsigned int len) {
-    zl = zrealloc(zl,len);
+    unsigned char* znew = zmalloc(len);
+    size_t old_size = zmalloc_size(zl);
+    (len > old_size) ? memcpy(znew, zl, old_size) : memcpy(znew, zl, len);
+    zfree(zl);
+    zl = znew;
     ZIPLIST_BYTES(zl) = intrev32ifbe(len);
     zl[len-1] = ZIP_END;
     return zl;
