@@ -49,7 +49,7 @@ size_t sdsZmallocSize(sds s) {
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
-    serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
+    serverAssertWithInfo(NULL,o,o->type == OBJ_STRING || o->type == OBJ_STRING_PMEM);
     switch(o->encoding) {
     case OBJ_ENCODING_RAW: return sdsZmallocSize(o->ptr);
     case OBJ_ENCODING_EMBSTR: return zmalloc_size(o)-sizeof(robj);
@@ -1718,7 +1718,7 @@ int processMultibulkBuffer(client *c) {
                 sdsclear(c->querybuf);
             } else {
                 c->argv[c->argc++] =
-                    createStringObject(c->querybuf+c->qb_pos,c->bulklen);
+                    createStringObjectOptim(c->querybuf+c->qb_pos,c->bulklen);
                 c->qb_pos += c->bulklen+2;
             }
             c->bulklen = -1;

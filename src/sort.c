@@ -119,7 +119,7 @@ robj *lookupKeyByPattern(redisDb *db, robj *pattern, robj *subst, int writeflag)
          * is a new object with refcount already incremented. */
         o = hashTypeGetValueObject(o, fieldobj->ptr);
     } else {
-        if (o->type != OBJ_STRING) goto noobj;
+        if (o->type != OBJ_STRING && o->type != OBJ_STRING_PMEM ) goto noobj;
 
         /* Every object that this function returns needs to have its refcount
          * increased. sortCommand decreases it again. */

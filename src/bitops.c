@@ -483,7 +483,7 @@ robj *lookupStringForBitCommand(client *c, size_t maxbit) {
         o = createObject(OBJ_STRING,sdsnewlen(NULL, byte+1));
         dbAdd(c->db,c->argv[1],o);
     } else {
-        if (checkType(c,o,OBJ_STRING)) return NULL;
+        if (checkTypeStringvariant(c,o)) return NULL;
         o = dbUnshareStringValue(c->db,c->argv[1],o);
         o->ptr = sdsgrowzero(o->ptr,byte+1);
     }
@@ -504,7 +504,7 @@ robj *lookupStringForBitCommand(client *c, size_t maxbit) {
  * If the source object is NULL the function is guaranteed to return NULL
  * and set 'len' to 0. */
 unsigned char *getObjectReadOnlyString(robj *o, long *len, char *llbuf) {
-    serverAssert(o->type == OBJ_STRING);
+    serverAssert(o->type == OBJ_STRING || o->type == OBJ_STRING_PMEM);
     unsigned char *p = NULL;
 
     /* Set the 'p' pointer to the string, that can be just a stack allocated
@@ -572,7 +572,7 @@ void getbitCommand(client *c) {
         return;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
-        checkType(c,o,OBJ_STRING)) return;
+        checkTypeStringvariant(c,o)) return;
 
     byte = bitoffset >> 3;
     bit = 7 - (bitoffset & 0x7);
@@ -635,7 +635,7 @@ void bitopCommand(client *c) {
             continue;
         }
         /* Return an error if one of the keys is not a string. */
-        if (checkType(c,o,OBJ_STRING)) {
+        if (checkTypeStringvariant(c,o)) {
             unsigned long i;
             for (i = 0; i < j; i++) {
                 if (objects[i])
@@ -774,7 +774,7 @@ void bitcountCommand(client *c) {
 
     /* Lookup, check for type, and return 0 for non existing keys. */
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
-        checkType(c,o,OBJ_STRING)) return;
+        checkTypeStringvariant(c,o)) return;
     p = getObjectReadOnlyString(o,&strlen,llbuf);
 
     /* Parse start/end range if any. */
@@ -838,7 +838,7 @@ void bitposCommand(client *c) {
         addReplyLongLong(c, bit ? -1 : 0);
         return;
     }
-    if (checkType(c,o,OBJ_STRING)) return;
+    if (checkTypeStringvariant(c,o)) return;
     p = getObjectReadOnlyString(o,&strlen,llbuf);
 
     /* Parse start/end range if any. */
@@ -1000,7 +1000,7 @@ void bitfieldGeneric(client *c, int flags) {
         /* Lookup for read is ok if key doesn't exit, but errors
          * if it's not a string. */
         o = lookupKeyRead(c->db,c->argv[1]);
-        if (o != NULL && checkType(c,o,OBJ_STRING)) {
+        if (o != NULL && checkTypeStringvariant(c,o)) {
             zfree(ops);
             return;
         }

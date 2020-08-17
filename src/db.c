@@ -350,7 +350,7 @@ int dbDelete(redisDb *db, robj *key) {
  * using an sdscat() call to append some data, or anything else.
  */
 robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
-    serverAssert(o->type == OBJ_STRING);
+    serverAssert(o->type == OBJ_STRING || o->type == OBJ_STRING_PMEM);
     if (o->refcount != 1 || o->encoding != OBJ_ENCODING_RAW) {
         robj *decoded = getDecodedObject(o);
         o = createRawStringObject(decoded->ptr, sdslen(decoded->ptr));
@@ -926,6 +926,7 @@ char* getObjectTypeName(robj *o) {
     } else {
         switch(o->type) {
         case OBJ_STRING: type = "string"; break;
+        case OBJ_STRING_PMEM: type = "string"; break;
         case OBJ_LIST: type = "list"; break;
         case OBJ_SET: type = "set"; break;
         case OBJ_ZSET: type = "zset"; break;

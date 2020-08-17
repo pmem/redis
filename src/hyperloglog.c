@@ -1150,7 +1150,7 @@ int isHLLObjectOrReply(client *c, robj *o) {
     struct hllhdr *hdr;
 
     /* Key exists, check type */
-    if (checkType(c,o,OBJ_STRING))
+    if (checkTypeStringvariant(c,o))
         return C_ERR; /* Error already sent. */
 
     if (!sdsEncodedObject(o)) goto invalid;
