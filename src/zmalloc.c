@@ -150,6 +150,7 @@ static size_t pmem_threshold = UINT_MAX;
 static size_t used_memory = 0;
 static size_t used_pmem_memory = 0;
 pthread_mutex_t used_memory_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t used_pmem_memory_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void zmalloc_default_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n",
