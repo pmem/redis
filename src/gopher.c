@@ -53,7 +53,7 @@ void processGopherRequest(client *c) {
     robj *o = lookupKeyRead(c->db,keyname);
 
     /* If there is no such key, return with a Gopher error. */
-    if (o == NULL || o->type != OBJ_STRING) {
+    if (o == NULL || (o->type != OBJ_STRING && o->type != OBJ_STRING_PMEM)) {
         char *errstr;
         if (o == NULL)
             errstr = "Error: no content at the specified key";

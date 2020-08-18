@@ -2038,6 +2038,7 @@ int RM_KeyType(RedisModuleKey *key) {
      * defines as desired. */
     switch(key->value->type) {
     case OBJ_STRING: return REDISMODULE_KEYTYPE_STRING;
+    case OBJ_STRING_PMEM: return REDISMODULE_KEYTYPE_STRING;
     case OBJ_LIST: return REDISMODULE_KEYTYPE_LIST;
     case OBJ_SET: return REDISMODULE_KEYTYPE_SET;
     case OBJ_ZSET: return REDISMODULE_KEYTYPE_ZSET;
@@ -2057,6 +2058,7 @@ size_t RM_ValueLength(RedisModuleKey *key) {
     if (key == NULL || key->value == NULL) return 0;
     switch(key->value->type) {
     case OBJ_STRING: return stringObjectLen(key->value);
+    case OBJ_STRING_PMEM: return stringObjectLen(key->value);
     case OBJ_LIST: return listTypeLength(key->value);
     case OBJ_SET: return setTypeSize(key->value);
     case OBJ_ZSET: return zsetLength(key->value);
@@ -2202,7 +2204,7 @@ char *RM_StringDMA(RedisModuleKey *key, size_t *len, int mode) {
         return emptystring;
     }
 
-    if (key->value->type != OBJ_STRING) return NULL;
+    if (key->value->type != OBJ_STRING && key->value->type != OBJ_STRING_PMEM) return NULL;
 
     /* For write access, and even for read access if the object is encoded,
      * we unshare the string (that has the side effect of decoding it). */
@@ -2227,7 +2229,7 @@ char *RM_StringDMA(RedisModuleKey *key, size_t *len, int mode) {
  * unless the new length value requested is zero. */
 int RM_StringTruncate(RedisModuleKey *key, size_t newlen) {
     if (!(key->mode & REDISMODULE_WRITE)) return REDISMODULE_ERR;
-    if (key->value && key->value->type != OBJ_STRING) return REDISMODULE_ERR;
+    if (key->value && key->value->type != OBJ_STRING && key->value->type != OBJ_STRING_PMEM) return REDISMODULE_ERR;
     if (newlen > 512*1024*1024) return REDISMODULE_ERR;
 
     /* Empty key and new len set to 0. Just return REDISMODULE_OK without

@@ -62,7 +62,7 @@ slowlogEntry *slowlogCreateEntry(client *c, robj **argv, int argc, long long dur
                 argc-slargc+1));
         } else {
             /* Trim too long strings as well... */
-            if (argv[j]->type == OBJ_STRING &&
+            if ((argv[j]->type == OBJ_STRING || argv[j]->type == OBJ_STRING_PMEM) &&
                 sdsEncodedObject(argv[j]) &&
                 sdslen(argv[j]->ptr) > SLOWLOG_ENTRY_MAX_STRING)
             {

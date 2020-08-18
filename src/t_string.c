@@ -167,7 +167,7 @@ int getGenericCommand(client *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL)
         return C_OK;
 
-    if (o->type != OBJ_STRING) {
+    if (o->type != OBJ_STRING && o->type != OBJ_STRING_PMEM ) {
         addReply(c,shared.wrongtypeerr);
         return C_ERR;
     } else {
@@ -219,7 +219,7 @@ void setrangeCommand(client *c) {
         size_t olen;
 
         /* Key exists, check type */
-        if (checkType(c,o,OBJ_STRING))
+        if (checkTypeStringvariant(c,o))
             return;
 
         /* Return existing string length when setting nothing */
@@ -259,7 +259,7 @@ void getrangeCommand(client *c) {
     if (getLongLongFromObjectOrReply(c,c->argv[3],&end,NULL) != C_OK)
         return;
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptybulk)) == NULL ||
-        checkType(c,o,OBJ_STRING)) return;
+        checkTypeStringvariant(c,o)) return;
 
     if (o->encoding == OBJ_ENCODING_INT) {
         str = llbuf;
@@ -298,7 +298,7 @@ void mgetCommand(client *c) {
         if (o == NULL) {
             addReplyNull(c);
         } else {
-            if (o->type != OBJ_STRING) {
+            if (o->type != OBJ_STRING && o->type != OBJ_STRING_PMEM) {
                 addReplyNull(c);
             } else {
                 addReplyBulk(c,o);
@@ -348,7 +348,7 @@ void incrDecrCommand(client *c, long long incr) {
     robj *o, *new;
 
     o = lookupKeyWrite(c->db,c->argv[1]);
-    if (o != NULL && checkType(c,o,OBJ_STRING)) return;
+    if (o != NULL && checkTypeStringvariant(c,o)) return;
     if (getLongLongFromObjectOrReply(c,o,&value,NULL) != C_OK) return;
 
     oldvalue = value;
@@ -408,7 +408,7 @@ void incrbyfloatCommand(client *c) {
     robj *o, *new, *aux1, *aux2;
 
     o = lookupKeyWrite(c->db,c->argv[1]);
-    if (o != NULL && checkType(c,o,OBJ_STRING)) return;
+    if (o != NULL && checkTypeStringvariant(c,o)) return;
     if (getLongDoubleFromObjectOrReply(c,o,&value,NULL) != C_OK ||
         getLongDoubleFromObjectOrReply(c,c->argv[2],&incr,NULL) != C_OK)
         return;
@@ -453,7 +453,7 @@ void appendCommand(client *c) {
         totlen = stringObjectLen(c->argv[2]);
     } else {
         /* Key exists, check type */
-        if (checkType(c,o,OBJ_STRING))
+        if (checkTypeStringvariant(c,o))
             return;
 
         /* "append" is an argument, so always an sds */
@@ -476,7 +476,7 @@ void appendCommand(client *c) {
 void strlenCommand(client *c) {
     robj *o;
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
-        checkType(c,o,OBJ_STRING)) return;
+        checkTypeStringvariant(c,o)) return;
     addReplyLongLong(c,stringObjectLen(o));
 }
 

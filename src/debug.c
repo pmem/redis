@@ -125,7 +125,7 @@ void xorObjectDigest(redisDb *db, robj *keyobj, unsigned char *digest, robj *o) 
     char buf[128];
 
     /* Save the key and associated value */
-    if (o->type == OBJ_STRING) {
+    if (o->type == OBJ_STRING || o->type == OBJ_STRING_PMEM) {
         mixStringObjectDigest(digest,o);
     } else if (o->type == OBJ_LIST) {
         listTypeIterator *li = listTypeInitIterator(o,0,LIST_TAIL);
@@ -553,7 +553,7 @@ NULL
         val = dictGetVal(de);
         key = dictGetKey(de);
 
-        if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
+        if ((val->type != OBJ_STRING && val->type != OBJ_STRING_PMEM) || !sdsEncodedObject(val)) {
             addReplyError(c,"Not an sds encoded string.");
         } else {
             addReplyStatusFormat(c,
@@ -833,7 +833,7 @@ void _serverAssertPrintClientInfo(const client *c) {
         char buf[128];
         char *arg;
 
-        if (c->argv[j]->type == OBJ_STRING && sdsEncodedObject(c->argv[j])) {
+        if ((c->argv[j]->type == OBJ_STRING || c->argv[j]->type == OBJ_STRING_PMEM) && sdsEncodedObject(c->argv[j])) {
             arg = (char*) c->argv[j]->ptr;
         } else {
             snprintf(buf,sizeof(buf),"Object type: %u, encoding: %u",
@@ -849,7 +849,7 @@ void serverLogObjectDebugInfo(const robj *o) {
     serverLog(LL_WARNING,"Object type: %d", o->type);
     serverLog(LL_WARNING,"Object encoding: %d", o->encoding);
     serverLog(LL_WARNING,"Object refcount: %d", o->refcount);
-    if (o->type == OBJ_STRING && sdsEncodedObject(o)) {
+    if ((o->type == OBJ_STRING || o->type == OBJ_STRING_PMEM) && sdsEncodedObject(o)) {
         serverLog(LL_WARNING,"Object raw string len: %zu", sdslen(o->ptr));
         if (sdslen(o->ptr) < 4096) {
             sds repr = sdscatrepr(sdsempty(),o->ptr,sdslen(o->ptr));

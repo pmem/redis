@@ -57,8 +57,8 @@ void zlibc_free(void *ptr) {
 #endif
 #endif
 
-#define DRAM_LOCATION 0
-#define PMEM_LOCATION 1
+#define DRAM_LOCATION 1
+#define PMEM_LOCATION 2
 
 /* Explicitly override malloc/free etc when using tcmalloc. */
 #if defined(USE_TCMALLOC)
@@ -97,7 +97,7 @@ static int zmalloc_is_pmem(void * ptr) {
     return DRAM_LOCATION;
 }
 
-static void zfree_pmem(void *ptr) {
+void zfree_pmem(void *ptr) {
     (void)(ptr);
     zmalloc_pmem_not_available();
 }
@@ -183,7 +183,7 @@ static int zmalloc_is_pmem(void * ptr) {
     return (temp_kind == MEMKIND_DEFAULT) ? DRAM_LOCATION : PMEM_LOCATION;
 }
 
-static void zfree_pmem(void *ptr) {
+void zfree_pmem(void *ptr) {
 #ifndef HAVE_MALLOC_SIZE
     void *realptr;
     size_t oldsize;
@@ -266,6 +266,15 @@ void *zmalloc(size_t size) {
     return (size < pmem_threshold) ? zmalloc_dram(size) : zmalloc_pmem(size);
 }
 
+void *zmalloc_with_info(size_t size, int* location) {
+    if (size < pmem_threshold) {
+        *location = DRAM_LOCATION;
+        return zmalloc_dram(size);
+    }
+    *location = PMEM_LOCATION;
+    return zmalloc_pmem(size);
+}
+
 /* Allocation and free functions that bypass the thread cache
  * and go straight to the allocator arena bins.
  * Currently implemented only for jemalloc. Used for online defragmentation. */
@@ -336,7 +345,7 @@ void *zrealloc_dram(void *ptr, size_t size) {
 }
 
 void *zrealloc(void *ptr, size_t size) {
-    if (!zmalloc_is_pmem(ptr)) {
+    if (zmalloc_is_pmem(ptr) == DRAM_LOCATION) {
         return zrealloc_dram(ptr, size);
     } else {
         return zrealloc_pmem(ptr, size);
@@ -379,7 +388,7 @@ void zfree_dram(void *ptr) {
 }
 
 void zfree(void *ptr) {
-    if (!zmalloc_is_pmem(ptr)) {
+    if (zmalloc_is_pmem(ptr) == DRAM_LOCATION) {
         zfree_dram(ptr);
     } else {
         zfree_pmem(ptr);

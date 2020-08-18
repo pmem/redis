@@ -1345,7 +1345,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
             expiretime = getExpire(db,&key);
 
             /* Save the key and associated value */
-            if (o->type == OBJ_STRING) {
+            if (o->type == OBJ_STRING || o->type == OBJ_STRING_PMEM) {
                 /* Emit a SET command */
                 char cmd[]="*3\r\n$3\r\nSET\r\n";
                 if (rioWrite(aof,cmd,sizeof(cmd)-1) == 0) goto werr;

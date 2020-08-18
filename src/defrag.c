@@ -109,7 +109,7 @@ robj *activeDefragStringOb(robj* ob, long *defragged) {
         return NULL;
 
     /* try to defrag robj (only if not an EMBSTR type (handled below). */
-    if (ob->type!=OBJ_STRING || ob->encoding!=OBJ_ENCODING_EMBSTR) {
+    if ((ob->type!=OBJ_STRING && ob->type!=OBJ_STRING_PMEM) || ob->encoding!=OBJ_ENCODING_EMBSTR) {
         if ((ret = activeDefragAlloc(ob))) {
             ob = ret;
             (*defragged)++;
@@ -117,7 +117,7 @@ robj *activeDefragStringOb(robj* ob, long *defragged) {
     }
 
     /* try to defrag string object */
-    if (ob->type == OBJ_STRING) {
+    if ((ob->type == OBJ_STRING) || (ob->type == OBJ_STRING_PMEM)) {
         if(ob->encoding==OBJ_ENCODING_RAW) {
             sds newsds = activeDefragSds((sds)ob->ptr);
             if (newsds) {
@@ -833,7 +833,7 @@ long defragKey(redisDb *db, dictEntry *de) {
         ob = newob;
     }
 
-    if (ob->type == OBJ_STRING) {
+    if ((ob->type == OBJ_STRING) || (ob->type == OBJ_STRING_PMEM)) {
         /* Already handled in activeDefragStringOb. */
     } else if (ob->type == OBJ_LIST) {
         if (ob->encoding == OBJ_ENCODING_QUICKLIST) {
